@@ -45,6 +45,11 @@ model User {
   videoPreviewUrl    String?           @map("video_preview_url") @db.VarChar(500)
   lastActiveAt       DateTime?         @map("last_active_at")
   locationArea       String?           @map("location_area") @db.VarChar(255)
+  // Snapped to a ~1km grid before storage - never store or return raw GPS.
+  latitude           Decimal?          @db.Decimal(9, 6)
+  longitude          Decimal?          @db.Decimal(9, 6)
+  locationUpdatedAt  DateTime?         @map("location_updated_at")
+  locationConsentAt  DateTime?         @map("location_consent_at")
   matchPreferences   MatchPreference[]
   matchesAsUser1     Match[]           @relation("MatchUser1")
   matchesAsUser2     Match[]           @relation("MatchUser2")
@@ -60,6 +65,8 @@ model User {
   blocksReceived     UserBlock[]       @relation("BlockedUser")
   notifications      Notification[]
   deviceTokens       DeviceToken[]
+  impressionsSeen    ProfileImpression[] @relation("ImpressionViewer")
+  impressionsShown   ProfileImpression[] @relation("ImpressionShown")
 
   @@index([email])
   @@index([department])
@@ -70,6 +77,10 @@ model User {
   @@index([gender, seeking])
   @@index([campus, isHosteller])
   @@index([isVerified, lastActiveAt])
+  // Bounding-box prefilter for distance queries.
+  @@index([latitude, longitude])
+  // Primary retrieval path: hard filters first, then geo.
+  @@index([isActive, gender, seeking, lastActiveAt])
   @@map("users")
 }
 
@@ -278,6 +289,38 @@ model AnalyticsEvent {
   @@index([eventType, createdAt])
   @@index([userId, createdAt])
   @@map("analytics_events")
+}
+
+/// Records which profiles were shown to which viewer.
+///
+/// Rolled up per (viewer, shown, day) rather than one row per impression -
+/// a row per impression would reach billions of rows at scale. Writes are
+/// buffered in Redis and flushed periodically by ImpressionService.
+///
+/// Powers: exposure fairness, click-through rate, A/B tests, and future
+/// model training. None of this can be backfilled, so it must be collected
+/// from the start.
+model ProfileImpression {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  viewerId    String   @map("viewer_id") @db.Uuid
+  shownId     String   @map("shown_id") @db.Uuid
+  day         DateTime @db.Date
+  count       Int      @default(1)
+  /// Best (lowest) position this profile held in the viewer's deck.
+  bestPosition Int?    @map("best_position")
+  /// Set once the viewer swipes on this profile - gives CTR without a join.
+  acted       Boolean  @default(false)
+  firstSeenAt DateTime @default(now()) @map("first_seen_at")
+  lastSeenAt  DateTime @default(now()) @updatedAt @map("last_seen_at")
+
+  viewer User @relation("ImpressionViewer", fields: [viewerId], references: [id], onDelete: Cascade)
+  shown  User @relation("ImpressionShown", fields: [shownId], references: [id], onDelete: Cascade)
+
+  @@unique([viewerId, shownId, day])
+  @@index([shownId, day])
+  @@index([viewerId, day])
+  @@index([day])
+  @@map("profile_impressions")
 }
 
 model DeviceToken {

@@ -9,4 +9,6 @@ const router = Router();
 router.get('/', protect, ProfileController.getProfile);
 router.put('/', protect, validateRequest(updateProfileSchema), ProfileController.updateProfile);
 
+router.put('/location', protect, ProfileController.updateLocation);
+
 export default router;

@@ -4,6 +4,7 @@ import app from './app';
 import { logger } from './utils/logger';
 import { setupSocket } from './socket';
 import { prisma } from './utils/prisma';
+import { ImpressionService } from './services/impression.service';
 
 const PORT = process.env.PORT || 3000;
 const httpServer = createServer(app);
@@ -17,7 +18,10 @@ const bootstrap = async () => {
     await prisma.$connect();
     logger.info('Database connection established successfully');
 
-    // 2. Start HTTP Server
+    // 2. Begin draining buffered impressions into Postgres
+    ImpressionService.startFlushLoop();
+
+    // 3. Start HTTP Server
     httpServer.listen(PORT, () => {
       logger.info(`Server is running on port ${PORT}`);
     });
@@ -33,6 +37,11 @@ bootstrap();
 const shutdown = async (signal: string) => {
   logger.info(`Received ${signal}. Shutting down gracefully...`);
   try {
+    // Drain buffered impressions before the process exits, otherwise the
+    // last minute of data is lost on every deploy.
+    await ImpressionService.stopFlushLoop();
+    logger.info('Impression buffer flushed');
+
     await prisma.$disconnect();
     logger.info('Prisma disconnected');
     httpServer.close(() => {

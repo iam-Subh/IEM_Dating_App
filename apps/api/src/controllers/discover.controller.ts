@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { ApiResponse } from '../utils/ApiResponse';
 import { prisma } from '../utils/prisma';
 import { RecommendationService } from '../services/recommendation.service';
+import { ImpressionService } from '../services/impression.service';
 import { scoreUpdateQueue } from '../services/score-update.worker';
 import { AnalyticsService } from '../services/analytics.service';
 import { NotificationService } from '../services/notification.service';
@@ -51,6 +52,10 @@ export class DiscoverController {
           matchPercentage: rec.matchPercentage,
         };
       });
+
+      // Record what was shown, in deck order. Fire-and-forget: impression
+      // tracking must never delay or fail the discovery response.
+      ImpressionService.recordBatch(userId, formatted.map((u) => u.id)).catch(() => {});
 
       // Track analytics
       AnalyticsService.trackRecommendation({

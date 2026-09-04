@@ -1,8 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
+import { snapToGrid, isValidCoords } from '../utils/geo';
+import { prisma } from '../utils/prisma';
 import { ProfileService } from '../services/profile.service';
 import { ApiResponse } from '../utils/ApiResponse';
 
 import { MediaCacheService } from '../services/mediaCache.service';
+import { RecommendationService } from '../services/recommendation.service';
 
 export class ProfileController {
   static async getProfile(req: Request, res: Response, next: NextFunction) {
@@ -33,6 +36,51 @@ export class ProfileController {
       console.error('Prisma Error Code:', error?.code);
       console.error('Prisma Error Meta:', JSON.stringify(error?.meta, null, 2));
       next(error);
+    }
+  }
+
+  /**
+   * Update the caller's location.
+   *
+   * Coordinates are snapped to a ~1km grid before storage - exact GPS is
+   * never persisted. Requires prior location consent (DPDP: location is
+   * personal data and needs its own consent, not a bundled one).
+   */
+  static async updateLocation(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = (req as any).user.sub;
+      const { latitude, longitude } = req.body ?? {};
+
+      if (!isValidCoords({ latitude, longitude })) {
+        return res.status(400).json(ApiResponse.error('Invalid coordinates'));
+      }
+
+      const snapped = snapToGrid({ latitude, longitude });
+
+      // Record consent on the first location write. The client is required to
+      // have shown the standalone location consent prompt before calling this;
+      // we stamp the time so the grant is auditable.
+      const existing = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { locationConsentAt: true },
+      });
+
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          latitude: snapped.latitude,
+          longitude: snapped.longitude,
+          locationUpdatedAt: new Date(),
+          locationConsentAt: existing?.locationConsentAt ?? new Date(),
+        },
+      });
+
+      // Moving changes who is nearby, so the cached deck is stale.
+      await RecommendationService.invalidateCache(userId);
+
+      return res.status(200).json(ApiResponse.success(null, 'Location updated'));
+    } catch (error) {
+      return next(error);
     }
   }
 }

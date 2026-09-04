@@ -1,5 +1,6 @@
 import { prisma } from '../utils/prisma';
 import { redisClient } from '../utils/redis';
+import { ImpressionService } from './impression.service';
 import { logger } from '../utils/logger';
 
 export class MatchService {
@@ -115,6 +116,10 @@ export class MatchService {
         action,
       },
     });
+
+    // Close the loop on the impression that led to this swipe, so
+    // click-through rate is available without joining the swipes table.
+    ImpressionService.markActed(userId, targetUserId).catch(() => {});
 
     // Check for mutual match
     let matchCreated = false;
