@@ -3,6 +3,12 @@ import { MatchService } from '../services/match.service';
 import { ApiResponse } from '../utils/ApiResponse';
 
 export class MatchController {
+  static async unmatch(req: Request, res: Response, next: NextFunction) {
+    try {
+      const result = await MatchService.unmatch((req as any).user.sub, req.params.matchId as string);
+      res.status(200).json(ApiResponse.success(result, 'Match ended'));
+    } catch (error) { next(error); }
+  }
   static async getPendingMatches(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = (req as any).user.sub;

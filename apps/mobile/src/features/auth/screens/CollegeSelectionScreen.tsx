@@ -12,11 +12,12 @@ import {
   TextInput,
   ScrollView,
 } from "react-native";
-import { useNavigation, useRoute } from "@react-navigation/native";
+import { useNavigation, useRoute, useFocusEffect } from "@react-navigation/native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { setCredentials } from "../../../store/authSlice";
 import { api } from "../../../services/api";
+import { RootState } from "../../../store";
 
 const { width } = Dimensions.get("window");
 
@@ -24,11 +25,23 @@ export const CollegeSelectionScreen = () => {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const dispatch = useDispatch();
-  const { user, token, ...profileData } = route.params || {};
+  const auth = useSelector((state: RootState) => state.auth);
+  const { ...profileData } = route.params || {};
+  const user = route.params?.user || auth.user;
+  const token = route.params?.token || auth.token;
 
-  const [selectedCollege, setSelectedCollege] = useState<string | null>(null);
+  const [selectedCollege] = useState<string | null>(user?.college || null);
   const [updating, setUpdating] = useState(false);
   
+  // This screen stays mounted in the navigation stack, so returning to it
+  // after a successful save would otherwise leave a stuck loading button
+  // that is also disabled. Clearing on focus covers every exit path.
+  useFocusEffect(
+    React.useCallback(() => {
+      setUpdating(false);
+    }, [])
+  );
+
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
 
@@ -47,11 +60,7 @@ export const CollegeSelectionScreen = () => {
     ]).start();
   }, []);
 
-  const collegeOptions = [
-    "Institute Of Engineering and Managment,Kolkata",
-    "University of Engineering and Managment,Newtown",
-    "University of Engineering and Managment,Jaipur",
-  ];
+  const collegeOptions = selectedCollege ? [selectedCollege] : [];
 
   const handleNext = async () => {
     if (!selectedCollege) return;
@@ -61,7 +70,7 @@ export const CollegeSelectionScreen = () => {
       const allowedKeys = [
         'name', 'birthday', 'age', 'gender', 'showGender', 
         'orientation', 'showOrientation', 'distancePreference', 
-        'seeking', 'college', 'department', 'year'
+        'seeking', 'department', 'year'
       ];
       
       const filteredData: any = {};
@@ -71,12 +80,7 @@ export const CollegeSelectionScreen = () => {
         }
       });
       
-      const finalData = {
-        ...filteredData,
-        college: selectedCollege
-      };
-
-      console.log('Sending Profile Update:', JSON.stringify(finalData, null, 2));
+      const finalData = filteredData;
 
       await api.put("/profile", finalData);
 
@@ -122,7 +126,7 @@ export const CollegeSelectionScreen = () => {
                   styles.collegeItem,
                   selectedCollege === college && styles.collegeItemSelected
                 ]}
-                onPress={() => setSelectedCollege(college)}
+                onPress={() => undefined}
                 activeOpacity={0.7}
               >
                 <Text style={[

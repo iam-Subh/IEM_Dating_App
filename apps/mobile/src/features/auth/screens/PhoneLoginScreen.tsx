@@ -11,8 +11,10 @@ import {
   StatusBar,
   TextInput,
   ScrollView,
+  Keyboard,
+  ActivityIndicator,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AnimatedBlurBackground } from '../../../components/ui/AnimatedBlurBackground';
 import { colors } from '../../../core/theme/colors';
@@ -21,7 +23,18 @@ import { api } from '../../../services/api';
 export const PhoneLoginScreen = () => {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
+  // This screen stays mounted in the navigation stack, so returning to it
+  // after a successful save would otherwise leave a stuck loading button
+  // that is also disabled. Clearing on focus covers every exit path.
+  useFocusEffect(
+    React.useCallback(() => {
+      setLoading(false);
+    }, [])
+  );
+
   const [error, setError] = useState('');
+  const [isInputFocused, setIsInputFocused] = useState(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const navigation = useNavigation<any>();
 
   const isValid = /^\d{10}$/.test(phoneNumber.trim());
@@ -46,6 +59,18 @@ export const PhoneLoginScreen = () => {
     ]).start();
   }, []);
 
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSubscription = Keyboard.addListener(showEvent, () => setIsKeyboardVisible(true));
+    const hideSubscription = Keyboard.addListener(hideEvent, () => setIsKeyboardVisible(false));
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
+
   const handleSendOTP = useCallback(async () => {
     if (!isValid) {
       setError('Enter a valid 10-digit phone number');
@@ -57,9 +82,9 @@ export const PhoneLoginScreen = () => {
     const fullPhone = `+91${phoneNumber.trim()}`;
 
     try {
-      await api.post('/auth/send-phone-otp', { phone: fullPhone });
+      const response = await api.post('/auth/send-phone-otp', { phone: fullPhone });
       setLoading(false);
-      navigation.navigate('PhoneOTPVerification', { phone: fullPhone });
+      navigation.navigate('PhoneOTPVerification', { phone: fullPhone, challengeId: response.data.data.challengeId });
     } catch (err: any) {
       setLoading(false);
       const msg = err.response?.data?.message || 'Failed to send code.';
@@ -76,15 +101,19 @@ export const PhoneLoginScreen = () => {
       <KeyboardAvoidingView
         style={styles.keyboardView}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        keyboardVerticalOffset={0}
       >
         <ScrollView 
-          contentContainerStyle={{ flexGrow: 1 }}
+          contentContainerStyle={[
+            styles.scrollContent,
+            isKeyboardVisible && styles.scrollContentKeyboardOpen,
+          ]}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
           showsVerticalScrollIndicator={false}
           bounces={false}
         >
-        <View style={styles.contentContainer}>
+        <View style={[styles.contentContainer, isKeyboardVisible && styles.contentContainerKeyboardOpen]}>
           
             <Animated.View 
               style={[
@@ -107,25 +136,31 @@ export const PhoneLoginScreen = () => {
               { opacity: fadeAnim2, transform: [{ translateY: slideAnim2 }] }
             ]}
           >
-            {/* The completely redesigned Phone Form (Dark Glass Pills) */}
             <View style={styles.formContainer}>
               
               <View style={styles.newInputGroup}>
                 <Text style={styles.newInputLabel}>Phone Number</Text>
-                <View style={styles.phoneInputRow}>
-                  <View style={styles.countryCodePill}>
+                <View style={[
+                  styles.phoneField,
+                  isInputFocused && styles.phoneFieldFocused,
+                  !!error && styles.phoneFieldError,
+                ]}>
+                  <View style={styles.countryCodeSection}>
                     <Text style={styles.flag}>🇮🇳</Text>
                     <Text style={styles.countryCodeText}>+91</Text>
                   </View>
+                  <View style={styles.phoneFieldDivider} />
                   <TextInput
-                    style={styles.newInputPill}
+                    style={styles.phoneInput}
                     placeholder="Enter 10-digit number"
-                    placeholderTextColor="rgba(255,255,255,0.4)"
+                    placeholderTextColor="rgba(255,255,255,0.38)"
                     value={phoneNumber}
                     onChangeText={(text) => {
                       setPhoneNumber(text.replace(/[^0-9]/g, '').slice(0, 10));
                       if (error) setError('');
                     }}
+                    onFocus={() => setIsInputFocused(true)}
+                    onBlur={() => setIsInputFocused(false)}
                     keyboardType="phone-pad"
                     maxLength={10}
                     returnKeyType="go"
@@ -152,10 +187,13 @@ export const PhoneLoginScreen = () => {
                 activeOpacity={0.8}
               >
                 {loading ? (
-                  <Text style={styles.newLoginBtnText}>Sending OTP...</Text>
+                  <>
+                    <ActivityIndicator size="small" color="#FFF" />
+                    <Text style={styles.newLoginBtnText}>Sending code</Text>
+                  </>
                 ) : (
                   <>
-                    <Text style={styles.newLoginBtnText}>Send Verify Code</Text>
+                    <Text style={styles.newLoginBtnText}>Send verification code</Text>
                     <MaterialCommunityIcons name="arrow-right" size={20} color={isValid ? "#FFF" : "rgba(255,255,255,0.5)"} style={styles.btnIconRedesigned} />
                   </>
                 )}
@@ -176,17 +214,29 @@ const styles = StyleSheet.create({
   keyboardView: {
     flex: 1,
   },
+  scrollContent: {
+    flexGrow: 1,
+  },
+  scrollContentKeyboardOpen: {
+    justifyContent: 'flex-end',
+  },
   contentContainer: {
     flex: 1,
-    justifyContent: 'center', // Center it like the email form
-    paddingHorizontal: 32, // Tighter horizontal margins
+    justifyContent: 'center',
+    paddingHorizontal: 28,
     paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight || 20 : 60,
-    paddingBottom: Platform.OS === 'ios' ? 100 : 80, // High padding to clear keyboard
+    paddingBottom: Platform.OS === 'ios' ? 72 : 52,
+  },
+  contentContainerKeyboardOpen: {
+    flex: 0,
+    justifyContent: 'flex-end',
+    paddingTop: 16,
+    paddingBottom: 14,
   },
   
   // Header Typography
   formHeaderArea: {
-    marginBottom: 40,
+    marginBottom: 32,
     alignItems: 'flex-start',
     width: '100%',
   },
@@ -224,58 +274,67 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   newInputGroup: {
-    marginBottom: 20,
+    marginBottom: 14,
   },
   newInputLabel: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.9)',
-    fontWeight: '600',
-    marginBottom: 8,
-    marginLeft: 16,
-    letterSpacing: 0.5,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.82)',
+    fontFamily: 'Inter_500Medium',
+    marginBottom: 9,
+    marginLeft: 4,
+    letterSpacing: 0.3,
   },
-  phoneInputRow: {
+  phoneField: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-  },
-  countryCodePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: 60,
-    backgroundColor: 'rgba(50,50,50,0.5)', // Darker, more solid glass
+    height: 56,
+    backgroundColor: 'rgba(18, 13, 17, 0.58)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)', // Slightly stronger border
-    borderRadius: 30, // Pill shape request
-    paddingLeft: 16,
-    paddingRight: 16,
-    gap: 6,
+    borderColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 18,
+    overflow: 'hidden',
+  },
+  phoneFieldFocused: {
+    backgroundColor: 'rgba(18, 13, 17, 0.72)',
+    borderColor: 'rgba(255,255,255,0.55)',
+  },
+  phoneFieldError: {
+    borderColor: 'rgba(255,107,107,0.8)',
+  },
+  countryCodeSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    paddingHorizontal: 15,
+    gap: 7,
   },
   flag: {
-    fontSize: 18,
+    fontSize: 17,
   },
   countryCodeText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
     color: '#FFF',
   },
-  newInputPill: {
+  phoneFieldDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  phoneInput: {
     flex: 1,
-    height: 60,
-    backgroundColor: 'rgba(50,50,50,0.5)', // Darker, more solid glass
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)', // Slightly stronger border
-    borderRadius: 30, // Maintains the pill shape request
-    paddingHorizontal: 24,
+    alignSelf: 'stretch',
+    paddingHorizontal: 16,
+    paddingVertical: 0,
     fontSize: 16,
     color: '#FFF',
     fontWeight: '500',
-    letterSpacing: 1,
+    letterSpacing: 0.7,
   },
   domainHint: {
     color: 'rgba(255,255,255,0.6)',
     fontSize: 12,
-    marginLeft: 16,
+    marginLeft: 4,
     marginTop: 6,
     fontWeight: '500',
   },
@@ -290,33 +349,35 @@ const styles = StyleSheet.create({
   // Buttons
   newLoginBtn: {
     width: '100%',
-    height: 60,
-    backgroundColor: 'rgba(255,255,255,0.1)', // Default transparent red before valid
-    borderRadius: 30,
+    height: 54,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 18,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 10,
+    gap: 8,
   },
   newLoginBtnActive: {
     backgroundColor: '#E84A3B',
+    borderColor: 'rgba(255,255,255,0.2)',
     shadowColor: '#E84A3B',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-    shadowRadius: 20, // Huge glow
-    elevation: 12,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.32,
+    shadowRadius: 12,
+    elevation: 6,
   },
   newLoginBtnDisabled: {
     opacity: 0.6,
   },
   newLoginBtnText: {
     color: '#FFF',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
-    letterSpacing: 0.5,
+    letterSpacing: 0.2,
   },
   btnIconRedesigned: {
-    marginLeft: 8,
     opacity: 0.9,
   },
 });

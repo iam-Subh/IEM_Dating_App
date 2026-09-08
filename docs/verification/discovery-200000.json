@@ -1,0 +1,38 @@
+{
+  "users": 200000,
+  "scope": "Single-process local PostgreSQL 16. Warm sequential retrieval only. Not a throughput or production capacity test.",
+  "reports": [
+    {
+      "scenario": "dense",
+      "samples": 100,
+      "p50": 74,
+      "p95": 98,
+      "p99": 106,
+      "candidates": 400
+    },
+    {
+      "scenario": "heavy_swiper",
+      "samples": 100,
+      "p50": 85,
+      "p95": 107,
+      "p99": 124,
+      "candidates": 400
+    },
+    {
+      "scenario": "distance",
+      "samples": 100,
+      "p50": 35,
+      "p95": 164,
+      "p99": 194,
+      "candidates": 400
+    },
+    {
+      "scenario": "sparse",
+      "samples": 100,
+      "p50": 27,
+      "p95": 57,
+      "p99": 93,
+      "candidates": 400
+    }
+  ]
+}

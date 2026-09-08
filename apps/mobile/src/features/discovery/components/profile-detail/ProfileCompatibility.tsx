@@ -1,3 +1,4 @@
+import { compatibilityValue } from '../../compatibility';
 import React, { useRef, useEffect } from 'react';
 import { View, Text, StyleSheet, Animated } from 'react-native';
 import Svg, { Circle, Text as SvgText, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
@@ -8,18 +9,9 @@ interface ProfileCompatibilityProps {
 }
 
 export const ProfileCompatibility: React.FC<ProfileCompatibilityProps> = ({ user }) => {
-  const matchPercentage = user.matchPercentage || 98;
-  const factors = user.matchFactors || [
-    { label: 'Same College (IEM)', boost: '+10%' },
-    { label: 'Same Department (CSE)', boost: '+12%' },
-    { label: 'Same Batch', boost: '+10%' },
-    { label: '8 Shared Interests', boost: '+28%' },
-    { label: 'Similar Lifestyle', boost: '+15%' },
-    { label: 'Compatible Personality', boost: '+15%' },
-    { label: 'Both Active Now', boost: '+10%' },
-  ];
-
-  if (!factors || factors.length === 0) return null;
+  const matchPercentage = compatibilityValue(user.matchPercentage);
+  const factors = Array.isArray(user.matchFactors) ? user.matchFactors : [];
+  if (matchPercentage === null || factors.length === 0) return null;
 
   const CompatibilityFactor = ({ factor, index }: { factor: any, index: number }) => {
     const scaleX = useRef(new Animated.Value(0)).current;
@@ -34,7 +26,7 @@ export const ProfileCompatibility: React.FC<ProfileCompatibilityProps> = ({ user
     }, []);
 
     // Extract number to calculate width percentage, cap at 100
-    const rawVal = parseInt(factor.boost.replace('+', '').replace('%', '')) || 10;
+    const rawVal = typeof factor.points === 'number' ? factor.points : 0;
     const progressWidth: any = `${Math.min(100, rawVal * 4)}%`;
 
     return (
@@ -69,8 +61,9 @@ export const ProfileCompatibility: React.FC<ProfileCompatibilityProps> = ({ user
 
   return (
     <View style={styles.container}>
-      <Text style={styles.sectionTitle}>COMPATIBILITY ANALYSIS</Text>
+      <Text style={styles.sectionTitle}>PROFILE COMPATIBILITY</Text>
       
+      <Text style={{ color: "#aaa", textAlign: "center" }}>Shared profile information. This score does not predict relationship success.</Text>
       <View style={styles.ringContainer}>
         <View style={styles.svgWrapper}>
           <Svg width={size} height={size}>

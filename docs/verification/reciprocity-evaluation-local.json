@@ -1,0 +1,14 @@
+{
+  "dataset": "Synthetic integration fixtures only",
+  "result": {
+    "modelVersion": 1,
+    "actors": 3,
+    "evaluated": 270,
+    "predicted": 270,
+    "coverage": 1,
+    "brier": 0.035164410824468285,
+    "baselineBrier": 0.09537968673204708,
+    "logLoss": 0.13212160004328222,
+    "limitation": "Chronological observational evaluation. Does not correct exposure selection bias or prove causal match lift."
+  }
+}

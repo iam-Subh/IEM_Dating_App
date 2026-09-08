@@ -68,6 +68,9 @@ Thumbs.db
 
 # Local scratch / machine-specific dumps
 tmp/
+.codex-tmp/
+.codex-export/
+.expo/
 
 # Stray Expo prebuild in the API package (mobile app lives in apps/mobile)
 apps/api/android/

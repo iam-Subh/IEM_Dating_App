@@ -1,4 +1,9 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import {
+  insertMessageOrdered,
+  isNewerMessage,
+  pendingLocalMessages,
+} from '../features/chat/messageOrdering';
 
 export interface ChatUser {
   id: string;
@@ -7,6 +12,7 @@ export interface ChatUser {
 }
 
 export interface LastMessage {
+  messageSeq?: number | null;
   id: string;
   content: string;
   senderId: string;
@@ -34,6 +40,14 @@ export interface Message {
   matchId: string;
   mediaKey?: string;
   mediaKeys?: string[];
+  clientMessageId?: string | null;
+  messageSeq?: number | null;
+  revision?: number;
+  editedAt?: string | null;
+  type?: string;
+  metadata?: Record<string, unknown> | null;
+  replyToId?: string | null;
+  reactions?: Record<string, string>;
 }
 
 interface ChatState {
@@ -60,6 +74,12 @@ const chatSlice = createSlice({
       state.conversations = action.payload;
       state.isLoadingConversations = false;
     },
+    appendConversations: (state, action: PayloadAction<Conversation[]>) => {
+      const existing = new Set(state.conversations.map((item) => item.matchId));
+      state.conversations.push(...action.payload.filter((item) => !existing.has(item.matchId)));
+      state.isLoadingConversations = false;
+    },
+    resetChatState: () => initialState,
     setLoadingConversations: (state, action: PayloadAction<boolean>) => {
       state.isLoadingConversations = action.payload;
     },
@@ -68,14 +88,11 @@ const chatSlice = createSlice({
         (msg, index, self) => index === self.findIndex((m) => m.id === msg.id)
       );
       
-      // CRITICAL: Preserve pending temp messages that haven't been confirmed yet.
-      // Without this, fetching from server wipes optimistic messages → "vanish and resend" bug.
+      // Preserve optimistic messages the server has not confirmed yet.
+      // Matching is by client message id: the previous content match discarded
+      // a genuine second copy of the same text.
       const existing = state.activeMessages[action.payload.matchId] || [];
-      const pendingTempMessages = existing.filter(m => 
-        m.id.startsWith('temp-') && 
-        // Only keep temp messages whose content is NOT already in server response
-        !serverMessages.some(sm => sm.content === m.content && sm.senderId === m.senderId)
-      );
+      const pendingTempMessages = pendingLocalMessages(existing, serverMessages);
       
       // Merge: server messages + surviving temp messages (temp at front = newest)
       state.activeMessages[action.payload.matchId] = [
@@ -106,17 +123,29 @@ const chatSlice = createSlice({
       if (!state.activeMessages[msg.matchId]) {
         state.activeMessages[msg.matchId] = [];
       }
-      const matchMessages = state.activeMessages[msg.matchId];
-      // Avoid duplicates
-      if (!matchMessages.find((m) => m.id === msg.id)) {
-        // Prepend new messages for inverted list (index 0 is bottom/newest)
-        matchMessages.unshift(msg);
-      }
-      // Update the conversation's last message
+      // Insert at the ordered position. Replay and out-of-order delivery mean
+      // an arrival is not always the newest message in the conversation.
+      state.activeMessages[msg.matchId] = insertMessageOrdered(
+        state.activeMessages[msg.matchId],
+        msg,
+      );
+      // Update the conversation preview only when this really is the latest
+      // message, otherwise a replayed older message rewrites the preview.
       const convIndex = state.conversations.findIndex((c) => c.matchId === msg.matchId);
-      if (convIndex !== -1) {
+      const currentPreview = convIndex === -1 ? null : state.conversations[convIndex].lastMessage;
+      const previewIsStale =
+        !currentPreview ||
+        isNewerMessage(msg, {
+          id: currentPreview.id,
+          senderId: currentPreview.senderId,
+          content: currentPreview.content,
+          sentAt: currentPreview.sentAt,
+          messageSeq: currentPreview.messageSeq,
+        });
+      if (convIndex !== -1 && previewIsStale) {
         state.conversations[convIndex].lastMessage = {
           id: msg.id,
+          messageSeq: msg.messageSeq,
           content: msg.content,
           senderId: msg.senderId,
           sentAt: msg.sentAt,
@@ -146,10 +175,10 @@ const chatSlice = createSlice({
           // CRITICAL: Keep the temp ID for FlatList key stability.
           // Changing the ID causes FlatList to unmount/remount the bubble (visual flash).
           // Update metadata (readAt, sentAt, mediaKeys) from server but preserve the key.
-          matchMessages[index] = {
-            ...realMessage,
-            id: tempId, // Keep stable key — prevents "hide and resend" visual effect
-          };
+          state.activeMessages[realMessage.matchId] = insertMessageOrdered(
+            matchMessages.filter((message) => message.id !== tempId && message.id !== realMessage.id),
+            realMessage,
+          );
         }
       }
       // Conversation lastMessage uses the REAL server ID for server consistency
@@ -198,11 +227,37 @@ const chatSlice = createSlice({
         }
       }
     },
+    applyMessageEdit: (state, action: PayloadAction<{ matchId: string; messageId: string; content: string; revision: number; editedAt: string }>) => {
+      const message = state.activeMessages[action.payload.matchId]?.find((item) => item.id === action.payload.messageId);
+      if (message && (message.revision ?? 1) <= action.payload.revision) Object.assign(message, action.payload);
+    },
+    applyReaction: (state, action: PayloadAction<{ matchId: string; messageId: string; userId: string; emoji: string | null }>) => {
+      const message = state.activeMessages[action.payload.matchId]?.find((item) => item.id === action.payload.messageId);
+      if (!message) return;
+      message.reactions = message.reactions || {};
+      if (action.payload.emoji) message.reactions[action.payload.userId] = action.payload.emoji;
+      else delete message.reactions[action.payload.userId];
+    },
+    markMessagesReadByPeer: (state, action: PayloadAction<{ matchId: string; messageIds?: string[]; throughMessageSeq?: number; readAt: string }>) => {
+      const ids = new Set(action.payload.messageIds ?? []);
+      for (const message of state.activeMessages[action.payload.matchId] ?? []) {
+        if ((!action.payload.messageIds && action.payload.throughMessageSeq === undefined) || ids.has(message.id) || (action.payload.throughMessageSeq !== undefined && (message.messageSeq ?? Infinity) <= action.payload.throughMessageSeq)) {
+          // Receipts are monotonic: a duplicate or out-of-order acknowledgement
+          // must never move a read time backwards or clear it.
+          const incoming = Date.parse(action.payload.readAt);
+          const current = message.readAt ? Date.parse(message.readAt) : NaN;
+          if (!Number.isNaN(incoming) && (Number.isNaN(current) || incoming < current)) {
+            message.readAt = action.payload.readAt;
+          }
+        }
+      }
+    },
   },
 });
 
 export const {
   setConversations,
+  appendConversations,
   setLoadingConversations,
   setMessages,
   prependMessages,
@@ -212,5 +267,9 @@ export const {
   setTyping,
   replaceOptimisticMessage,
   removeMessage,
+  resetChatState,
+  applyMessageEdit,
+  applyReaction,
+  markMessagesReadByPeer,
 } = chatSlice.actions;
 export default chatSlice.reducer;

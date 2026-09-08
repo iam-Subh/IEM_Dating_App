@@ -1,29 +1,31 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "IEM Connect",
+    "slug": "iem-connect",
+    "scheme": "iemdating",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": false,
+      "bundleIdentifier": "com.iemconnect.app",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Use the camera to take profile photos and Story media.",
+        "NSPhotoLibraryUsageDescription": "Use your photo library to select profile photos and Story media.",
+        "NSMicrophoneUsageDescription": "Use the microphone when you record video or voice media.",
+        "NSLocationWhenInUseUsageDescription": "Use your approximate location to find profiles within your selected distance."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#32002f"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.mobile",
-      "usesCleartextTraffic": true,
+      "package": "com.iemconnect.app",
+      "versionCode": 1,
       "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
@@ -31,8 +33,41 @@
     },
     "plugins": [
       "expo-font",
-      "react-native-compressor",
-      "@siteed/expo-audio-studio"
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#32002f"
+        }
+      ],
+      "@siteed/audio-studio",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Use your approximate location to find profiles within your selected distance."
+        }
+      ],
+      "expo-secure-store",
+      "expo-status-bar",
+      "expo-video",
+      "expo-audio",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Use your photo library to select profile photos and Story media.",
+          "cameraPermission": "Use the camera to take profile photos and Story media.",
+          "microphonePermission": "Use the microphone when you record video or voice media."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Use the camera to take profile photos and Story media.",
+          "microphonePermission": "Use the microphone when you record video media."
+        }
+      ],
+      "expo-notifications"
     ]
   }
 }

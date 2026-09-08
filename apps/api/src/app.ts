@@ -27,6 +27,10 @@ import chatRoutes from './routes/chat.routes';
 import adminRoutes from './routes/admin.routes';
 import blockRoutes from './routes/block.routes';
 import notificationRoutes from './routes/notification.routes';
+import verificationRoutes from './routes/verification.routes';
+import accountRoutes from './routes/account.routes';
+import storyRoutes from './routes/story.routes';
+import searchRoutes from './routes/search.routes';
 
 // Main routes
 app.use('/api/v1/auth', authRoutes);
@@ -39,6 +43,10 @@ app.use('/api/v1/chat', chatRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/block', blockRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
+app.use('/api/v1/verification', verificationRoutes);
+app.use('/api/v1/account', accountRoutes);
+app.use('/api/v1/stories', storyRoutes);
+app.use('/api/v1/search', searchRoutes);
 
 app.use(globalErrorHandler);
 

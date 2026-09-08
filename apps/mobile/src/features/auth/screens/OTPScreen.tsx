@@ -20,6 +20,7 @@ import { api } from '../../../services/api';
 import { setCredentials } from '../../../store/authSlice';
 import { colors } from '../../../core/theme/colors';
 import { AnimatedBlurBackground } from '../../../components/ui/AnimatedBlurBackground';
+import { credentialStore } from '../../../services/credentialStore';
 
 const OTP_LENGTH = 6;
 const RESEND_COOLDOWN = 60;
@@ -30,6 +31,7 @@ export const OTPScreen = () => {
   const navigation = useNavigation<any>();
   const dispatch = useDispatch();
   const email = route.params?.email || '';
+  const [challengeId, setChallengeId] = useState(route.params?.challengeId || '');
 
   const [otp, setOtp] = useState<string[]>(Array(OTP_LENGTH).fill(''));
   const [timer, setTimer] = useState(RESEND_COOLDOWN);
@@ -144,12 +146,13 @@ export const OTPScreen = () => {
     setVerifying(true);
 
     try {
-      await api.post('/auth/verify-otp', { email, code });
+      await api.post('/auth/verify-otp', { email, code, challengeId });
       
       const password = route.params?.password;
       
       if (password) {
         const res = await api.post('/auth/login', { email, password });
+        await credentialStore.setRefreshToken(res.data.data.refreshToken);
         
         setSuccess(true);
         Animated.parallel([
@@ -171,6 +174,7 @@ export const OTPScreen = () => {
             setCredentials({
               user: res.data.data.user,
               token: res.data.data.accessToken,
+              nextRequiredStep: res.data.data.onboarding?.nextRequiredStep,
             })
           );
         }, 1500);
@@ -195,7 +199,8 @@ export const OTPScreen = () => {
     if (timer > 0 || isResending) return;
     setIsResending(true);
     try {
-      await api.post('/auth/send-otp', { email });
+      const response = await api.post('/auth/send-otp', { email });
+      setChallengeId(response.data.data.challengeId);
       setTimer(RESEND_COOLDOWN);
       setOtp(Array(OTP_LENGTH).fill(''));
       inputRefs.current[0]?.focus();

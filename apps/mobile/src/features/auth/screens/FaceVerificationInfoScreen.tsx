@@ -21,16 +21,26 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Circle, Path, Rec
 const FaceScannerIcon = () => {
   const scanAnim = useRef(new Animated.Value(0)).current;
   const spinAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    // Scan line animation (translateY 45 -> 155)
+    // Sweep down the face and back up again. A one-way loop snapped back to
+    // the top each cycle, which read as a repeated jump rather than a scan.
     Animated.loop(
-      Animated.timing(scanAnim, { 
-        toValue: 1, 
-        duration: 2000, 
-        easing: Easing.linear,
-        useNativeDriver: true 
-      })
+      Animated.sequence([
+        Animated.timing(scanAnim, {
+          toValue: 1,
+          duration: 1500,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(scanAnim, {
+          toValue: 0,
+          duration: 1500,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
     ).start();
 
     // Circular rotation animation for the dashed ring
@@ -42,20 +52,54 @@ const FaceScannerIcon = () => {
         useNativeDriver: true,
       })
     ).start();
+
+    // Slow breathing pulse on the ring so it reads as active rather than
+    // just spinning at a constant size.
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 1600,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 0,
+          duration: 1600,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
   }, []);
 
-  // Keep laser strictly inside the 4 corner borders (from Y=52 to Y=132)
-  const scanTranslateY = scanAnim.interpolate({ inputRange: [0, 1], outputRange: [52, 132] });
+  // Travel from the top of the head down to the mouth.
+  //
+  // The 85px face icon uses a 24-unit viewBox (scale 85/24) and is centred in
+  // the 180px-tall container, so it spans y 47.5 - 132.5. Mapping the icon's
+  // own paths: the head starts at viewBox y=2 (~55px) and the mouth curve ends
+  // at y=16 (~105px), with a little travel past it to just below the jaw.
+  const scanTranslateY = scanAnim.interpolate({ inputRange: [0, 1], outputRange: [55, 121] });
   
-  // Maintain full opacity from the start, snap to 0 at the exact end so it can reset cleanly 
+  // Ease the line out slightly as it turns around at each end.
   const scanOpacity = scanAnim.interpolate({
-    inputRange: [0, 0.01, 0.99, 1],
-    outputRange: [0, 1, 1, 0]
+    inputRange: [0, 0.12, 0.88, 1],
+    outputRange: [0.35, 1, 1, 0.35]
   });
 
   const spinRotate = spinAnim.interpolate({
     inputRange: [0, 1],
     outputRange: ['0deg', '360deg']
+  });
+
+  const ringScale = pulseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.94, 1.04],
+  });
+
+  const ringOpacity = pulseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.45, 1],
   });
 
   return (
@@ -67,12 +111,6 @@ const FaceScannerIcon = () => {
             <Stop offset="0%" stopColor="#ff6a00" />
             <Stop offset="100%" stopColor="#ee0979" />
           </SvgLinearGradient>
-          
-          <SvgLinearGradient id="scanLaser" x1="0%" y1="0%" x2="100%" y2="0%">
-            <Stop offset="0%" stopColor="#ee0979" stopOpacity="0" />
-            <Stop offset="50%" stopColor="#ee0979" stopOpacity="0.9" />
-            <Stop offset="100%" stopColor="#ee0979" stopOpacity="0" />
-          </SvgLinearGradient>
         </Defs>
 
         {/* Framing Corners */}
@@ -83,7 +121,13 @@ const FaceScannerIcon = () => {
       </Svg>
 
       {/* Animated Background Ring */}
-      <Animated.View style={{ position: 'absolute', transform: [{ rotate: spinRotate }] }}>
+      <Animated.View
+        style={{
+          position: 'absolute',
+          opacity: ringOpacity,
+          transform: [{ rotate: spinRotate }, { scale: ringScale }],
+        }}
+      >
         <Svg width="200" height="200" viewBox="0 0 200 200">
           <Circle cx="100" cy="100" r="90" fill="none" stroke="#ff6a00" strokeWidth="1" strokeDasharray="10 5" opacity="0.5" />
         </Svg>
@@ -108,7 +152,14 @@ const FaceScannerIcon = () => {
       {/* Animated Scan Line */}
       <Animated.View style={{ position: 'absolute', top: 0, transform: [{ translateY: scanTranslateY }], opacity: scanOpacity }}>
         <Svg width="200" height="4" viewBox="0 0 200 4">
-          <Rect x="40" y="0" width="120" height="4" fill="url(#scanLaser)" />
+          <Defs>
+            <SvgLinearGradient id="scanLineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+              <Stop offset="0%" stopColor="#F5F1E8" stopOpacity="0" />
+              <Stop offset="50%" stopColor="#F5F1E8" stopOpacity="0.95" />
+              <Stop offset="100%" stopColor="#F5F1E8" stopOpacity="0" />
+            </SvgLinearGradient>
+          </Defs>
+          <Rect x="40" y="0" width="120" height="4" fill="url(#scanLineGradient)" />
         </Svg>
       </Animated.View>
     </View>
@@ -167,8 +218,7 @@ export const FaceVerificationInfoScreen = () => {
         <Text style={styles.title}>Let's keep it real</Text>
 
         <Text style={styles.description}>
-          For more authentic connections, users in your region are required to complete a biometric Face Check with a video selfie. This helps prevent fraud, detect duplicate accounts, and enforce our terms. If your profile photos match your Face Check, you'll get a Photo Verified badge.{" "}
-          <Text style={styles.linkText} onPress={() => Linking.openURL('https://example.com/learn-more')}>Learn more</Text>
+          Add clear, recent photos that show your face. The app verifies your college membership. It does not provide photo or biometric verification at this time.
         </Text>
 
         <Text style={styles.warning}>

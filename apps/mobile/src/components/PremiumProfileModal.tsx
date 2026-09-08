@@ -1,3 +1,4 @@
+import { compatibilityValue, compatibilityLabel, compatibilityColor } from '../features/discovery/compatibility';
 import React, { useRef } from 'react';
 import {
   View,
@@ -21,7 +22,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
-import { colors } from '../../core/theme/colors';
+import { colors } from '../core/theme/colors';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const CARD_HEIGHT = SCREEN_HEIGHT * 0.85;
@@ -40,7 +41,7 @@ interface PremiumProfileModalProps {
     id: string;
     name: string;
     age?: number;
-    year?: string;
+    graduationYear?: number | null;
     department?: string;
     college?: string;
     imageUri: string;
@@ -53,7 +54,7 @@ interface PremiumProfileModalProps {
     clubs?: string[];
     hangoutSpots?: string[];
     isVerified?: boolean;
-    matchPercentage?: number;
+    matchPercentage?: number | null;
     distance?: string;
   };
 }
@@ -142,12 +143,8 @@ export const PremiumProfileModal: React.FC<PremiumProfileModalProps> = ({
     opacity: opacity.value,
   }));
 
-  const matchPercentage = user.matchPercentage || 0;
-  const getMatchColor = (percentage: number) => {
-    if (percentage >= 80) return '#4ade80';
-    if (percentage >= 60) return '#facc15';
-    return '#f87171';
-  };
+  const matchPercentage = compatibilityValue(user.matchPercentage);
+  const getMatchColor = compatibilityColor;
 
   return (
     <View style={styles.container} pointerEvents={visible ? 'auto' : 'none'}>
@@ -236,10 +233,10 @@ export const PremiumProfileModal: React.FC<PremiumProfileModalProps> = ({
 
             {/* Top Badges */}
             <View style={styles.topBadges}>
-              {matchPercentage > 0 && (
+              {matchPercentage !== null && (
                 <View style={[styles.matchBadge, { borderColor: getMatchColor(matchPercentage) }]}>
                   <Text style={[styles.matchText, { color: getMatchColor(matchPercentage) }]}>
-                    {matchPercentage}% Match
+                    {compatibilityLabel(matchPercentage)}
                   </Text>
                 </View>
               )}
@@ -265,9 +262,9 @@ export const PremiumProfileModal: React.FC<PremiumProfileModalProps> = ({
                 )}
               </View>
 
-              {(user.year || user.department) && (
+              {(user.graduationYear || user.department) && (
                 <Text style={styles.academicInfo}>
-                  {[user.year, user.department].filter(Boolean).join(' • ')}
+                  {[user.graduationYear ? `Class of ${user.graduationYear}` : null, user.department].filter(Boolean).join(' • ')}
                 </Text>
               )}
               {user.college && (
@@ -365,7 +362,7 @@ const styles = StyleSheet.create({
     zIndex: 9999,
   },
   backdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.85)',
   },
   modalContent: {
@@ -450,7 +447,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
-    backdropFilter: 'blur(10px)',
+    ...({ backdropFilter: 'blur(10px)' } as Record<string, string>),
   },
   gradientOverlay: {
     position: 'absolute',
@@ -472,7 +469,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1.5,
     backgroundColor: 'rgba(0,0,0,0.6)',
-    backdropFilter: 'blur(10px)',
+    ...({ backdropFilter: 'blur(10px)' } as Record<string, string>),
   },
   matchText: {
     fontSize: 13,
@@ -521,7 +518,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 12,
-    backdropFilter: 'blur(10px)',
+    ...({ backdropFilter: 'blur(10px)' } as Record<string, string>),
   },
   distanceText: {
     fontSize: 13,

@@ -10,13 +10,22 @@
   "scripts": {
     "postinstall": "patch-package",
     "dev:api": "npm run dev --workspace=@iem-dating/api",
-    "dev:mobile": "npm run start --workspace=@iem-dating/mobile",
-    "services:up": "docker-compose up -d",
-    "services:down": "docker-compose down"
+    "dev:mobile": "npm run start --workspace=mobile",
+    "typecheck:mobile": "npm run typecheck --workspace=mobile",
+    "services:up": "docker compose up -d postgres redis",
+    "services:down": "docker compose down"
   },
   "overrides": {
-    "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "@react-native/metro-config": "0.86.3",
+    "react-native-reanimated": "4.5.1",
+    "react-native-worklets": "0.10.1",
+    "query-string": "9.5.1",
+    "shell-quote": "1.10.0",
+    "tar": "7.5.22",
+    "uuid": "11.1.1"
   },
   "devDependencies": {
     "patch-package": "^8.0.1"

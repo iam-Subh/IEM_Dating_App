@@ -2,8 +2,34 @@ import { Router } from 'express';
 import { protect } from '../middlewares/auth.middleware';
 import { NotificationService } from '../services/notification.service';
 import { ApiResponse } from '../utils/ApiResponse';
+import { PushService } from '../services/push.service';
+import { z } from 'zod';
 
 const router = Router();
+const deviceSchema = z.object({
+  token: z.string().regex(/^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]+\]$/).max(500),
+  platform: z.enum(['ios', 'android']),
+}).strict();
+
+router.put('/devices', protect, async (req, res, next) => {
+  try {
+    const parsed = deviceSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json(ApiResponse.error('Invalid device token'));
+    const input = parsed.data;
+    await PushService.register((req as any).user.sub, input.token, input.platform);
+    res.status(204).send();
+  } catch (error) { next(error); }
+});
+
+router.delete('/devices', protect, async (req, res, next) => {
+  try {
+    const parsed = deviceSchema.pick({ token: true }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json(ApiResponse.error('Invalid device token'));
+    const input = parsed.data;
+    await PushService.unregister((req as any).user.sub, input.token);
+    res.status(204).send();
+  } catch (error) { next(error); }
+});
 
 /**
  * GET /notifications — Get paginated notifications for the current user.

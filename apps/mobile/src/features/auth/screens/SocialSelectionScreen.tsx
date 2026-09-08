@@ -11,8 +11,9 @@ import {
   Dimensions,
   ScrollView,
   TextInput,
+  Keyboard,
 } from "react-native";
-import { useNavigation, useRoute } from "@react-navigation/native";
+import { useNavigation, useRoute, useFocusEffect } from "@react-navigation/native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { api } from "../../../services/api";
 
@@ -30,9 +31,22 @@ export const SocialSelectionScreen = () => {
   const [attendanceMood, setAttendanceMood] = useState<string | null>(null);
   const [hangoutSpot, setHangoutSpot] = useState("");
   const [updating, setUpdating] = useState(false);
+  // This screen stays mounted in the navigation stack, so returning to it
+  // after a successful save would otherwise leave a stuck loading button
+  // that is also disabled. Clearing on focus covers every exit path.
+  useFocusEffect(
+    React.useCallback(() => {
+      setUpdating(false);
+    }, [])
+  );
+
+  const [keyboardContentInset, setKeyboardContentInset] = useState(0);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
+  const buttonKeyboardOffset = useRef(new Animated.Value(0)).current;
+  const initialWindowHeight = useRef(Dimensions.get("window").height);
+  const scrollViewRef = useRef<ScrollView | null>(null);
 
   useEffect(() => {
     Animated.parallel([
@@ -48,6 +62,47 @@ export const SocialSelectionScreen = () => {
       }),
     ]).start();
   }, []);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+    const showSubscription = Keyboard.addListener(showEvent, (event) => {
+      const resizedHeight = Math.max(
+        0,
+        initialWindowHeight.current - Dimensions.get("window").height
+      );
+      const requiredLift = Platform.OS === "android"
+        ? Math.max(0, event.endCoordinates.height - resizedHeight)
+        : 0;
+
+      setKeyboardContentInset(requiredLift + 40);
+
+      Animated.timing(buttonKeyboardOffset, {
+        toValue: -requiredLift,
+        duration: event.duration || 180,
+        useNativeDriver: true,
+      }).start();
+
+      setTimeout(() => {
+        scrollViewRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    });
+
+    const hideSubscription = Keyboard.addListener(hideEvent, (event) => {
+      setKeyboardContentInset(0);
+      Animated.timing(buttonKeyboardOffset, {
+        toValue: 0,
+        duration: event.duration || 180,
+        useNativeDriver: true,
+      }).start();
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [buttonKeyboardOffset]);
 
   const toggleClub = (club: string) => {
     if (selectedClubs.includes(club)) {
@@ -89,7 +144,7 @@ export const SocialSelectionScreen = () => {
       <StatusBar barStyle="light-content" />
       
       <KeyboardAvoidingView 
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.keyboardView}
       >
         <View style={styles.topHeader}>
@@ -99,7 +154,16 @@ export const SocialSelectionScreen = () => {
         </View>
 
         <Animated.View style={[styles.content, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-          <ScrollView showsVerticalScrollIndicator={false}>
+          <ScrollView
+            ref={scrollViewRef}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            contentContainerStyle={[
+              styles.scrollContent,
+              keyboardContentInset > 0 && { paddingBottom: keyboardContentInset },
+            ]}
+          >
             <View style={styles.header}>
               <Text style={styles.title}>Social & Vibes</Text>
               <Text style={styles.subtitle}>
@@ -149,16 +213,29 @@ export const SocialSelectionScreen = () => {
             <View style={styles.inputContainer}>
               <TextInput
                 style={styles.input}
-                placeholder="e.g. Chai stall near RDB, Cafe coffee day..."
+                placeholder="e.g. RDB chai stall or CCD"
                 placeholderTextColor="rgba(255,255,255,0.3)"
                 value={hangoutSpot}
                 onChangeText={setHangoutSpot}
+                multiline
+                numberOfLines={2}
+                maxLength={100}
+                textAlignVertical="top"
+                onFocus={() => {
+                  setTimeout(() => {
+                    scrollViewRef.current?.scrollToEnd({ animated: true });
+                  }, 180);
+                }}
               />
             </View>
-            <View style={{ height: 40 }} />
           </ScrollView>
 
-          <View style={styles.footer}>
+          <Animated.View
+            style={[
+              styles.footer,
+              { transform: [{ translateY: buttonKeyboardOffset }] },
+            ]}
+          >
             <TouchableOpacity 
               style={[styles.nextButton, (!attendanceMood || updating) && styles.disabledNextButton]}
               onPress={handleNext}
@@ -169,7 +246,7 @@ export const SocialSelectionScreen = () => {
                 {updating ? "Processing..." : "Next"}
               </Text>
             </TouchableOpacity>
-          </View>
+          </Animated.View>
         </Animated.View>
       </KeyboardAvoidingView>
     </View>
@@ -195,6 +272,9 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 40,
   },
   header: {
     marginBottom: 25,
@@ -278,9 +358,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
   },
   input: {
-    height: 56,
+    minHeight: 72,
+    maxHeight: 96,
     color: "#FFF",
-    fontSize: 16,
+    fontSize: 15,
+    lineHeight: 21,
+    paddingVertical: 13,
+    includeFontPadding: false,
+    textAlignVertical: "top",
   },
   footer: {
     paddingVertical: 10,

@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Socket } from 'socket.io-client';
+import { store } from '../store';
+import { decideSendRetry } from './queue/sendRetryPolicy';
 
 export interface QueuedMessage {
   tempId: string;           // Optimistic ID shown in UI
@@ -10,46 +12,94 @@ export interface QueuedMessage {
   queuedAt: number;
   status: 'pending' | 'sending' | 'failed' | 'sent';
   sequenceNum?: number;     // Track original send order (WhatsApp-style)
+  type?: string;
+  metadata?: Record<string, unknown>;
+  replyToId?: string;
+  /** Failed send count. Used to drop a message that can never be delivered. */
+  attempts?: number;
 }
 
-const OFFLINE_QUEUE_KEY = '@chat:offlineQueue';
+
+
+let queueMutation: Promise<void> = Promise.resolve();
+const serialize = <T>(work: () => Promise<T>): Promise<T> => {
+  const result = queueMutation.then(work, work);
+  queueMutation = result.then(() => undefined, () => undefined);
+  return result;
+};
+
+const queueKey = () => {
+  const userId = store.getState().auth.user?.id;
+  return userId ? `@chat:offlineQueue:${userId}` : null;
+};
 
 export const addToOfflineQueue = async (message: QueuedMessage) => {
+  const key = queueKey();
+  return serialize(async () => {
   try {
-    const existing = await getOfflineQueue();
+    if (!key) return;
+    const existing = await readQueue(key);
     const exists = existing.some(m => m.tempId === message.tempId);
     if (!exists) {
       await AsyncStorage.setItem(
-        OFFLINE_QUEUE_KEY,
+        key,
         JSON.stringify([...existing, message])
       );
     }
   } catch (err) {
     console.error('[OfflineQueue] Failed to queue message:', err);
   }
+  });
 };
 
-export const getOfflineQueue = async (): Promise<QueuedMessage[]> => {
+const readQueue = async (key: string | null): Promise<QueuedMessage[]> => {
   try {
-    const data = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
+    if (!key) return [];
+    const data = await AsyncStorage.getItem(key);
     return data ? JSON.parse(data) : [];
   } catch {
     return [];
   }
 };
 
-export const removeFromQueue = async (tempId: string) => {
+export const getOfflineQueue = async (): Promise<QueuedMessage[]> => readQueue(queueKey());
+
+const recordAttempt = async (tempId: string, key: string | null, attempts: number, failed = false) =>
+  serialize(async () => {
+    try {
+      if (!key) return;
+      const existing = await readQueue(key);
+      await AsyncStorage.setItem(
+        key,
+        JSON.stringify(existing.map((m) => (m.tempId === tempId ? { ...m, attempts, ...(failed ? { status: 'failed' } : {}) } : m))),
+      );
+    } catch (err) {
+      console.error('[OfflineQueue] Failed to record a send attempt:', err);
+    }
+  });
+
+const removeFromAccountQueue = async (tempId: string, key: string | null) => serialize(async () => {
   try {
-    const existing = await getOfflineQueue();
+    if (!key) return;
+    const existing = await readQueue(key);
     const filtered = existing.filter(m => m.tempId !== tempId);
-    await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(filtered));
+    await AsyncStorage.setItem(key, JSON.stringify(filtered));
   } catch (err) {
     console.error('[OfflineQueue] Failed to remove from queue:', err);
   }
-};
+});
+
+export const removeFromQueue = async (tempId: string) => removeFromAccountQueue(tempId, queueKey());
 
 export const clearOfflineQueue = async () => {
-  await AsyncStorage.removeItem(OFFLINE_QUEUE_KEY);
+  const key = queueKey();
+  return serialize(async () => {
+    if (!key) return;
+    for (let attempt = 0; ; attempt++) {
+      try { await AsyncStorage.removeItem(key); return; }
+      catch (error) { if (attempt === 2) throw error; }
+    }
+  });
 };
 
 // Retry messages when connection restores.
@@ -60,12 +110,15 @@ export const retryOfflineMessages = async (
   matchId: string,
   onMessageConfirmed?: (queuedMsg: QueuedMessage, serverMessage: any) => void,
 ): Promise<QueuedMessage[]> => {
-  const queue = await getOfflineQueue();
-  const matchQueue = queue.filter(m => m.matchId === matchId);
+  const key = queueKey();
+  const token = store.getState().auth.token;
+  const isCurrentAccount = () => !!key && queueKey() === key && store.getState().auth.token === token;
+  const queue = await readQueue(key);
+  const matchQueue = queue.filter(m => m.matchId === matchId && m.status !== 'failed');
 
-  if (matchQueue.length === 0 || !socket.connected) return [];
+  if (matchQueue.length === 0 || !socket.connected || !isCurrentAccount()) return [];
 
-  console.log('[OfflineQueue] Retrying ' + matchQueue.length + ' messages for match ' + matchId);
+  console.log('[OfflineQueue] Retrying queued messages');
 
   // CRITICAL: Sort by sequence number to preserve original send order
   matchQueue.sort((a, b) => {
@@ -75,32 +128,34 @@ export const retryOfflineMessages = async (
     return a.queuedAt - b.queuedAt;
   });
 
-  console.log('[OfflineQueue] Sorted order:', matchQueue.map(m => ({
-    tempId: m.tempId,
-    content: m.content,
-    sequenceNum: m.sequenceNum,
-    queuedAt: m.queuedAt
-  })));
-
   const successfulSends: QueuedMessage[] = [];
 
   // Send sequentially in correct order
   for (const item of matchQueue) {
+    if (!socket.connected || !isCurrentAccount()) break;
+    let failureCode: string | null = null;
     try {
       await new Promise<void>((resolve) => {
+        let settled = false;
         const timeout = setTimeout(() => {
-          console.log('[OfflineQueue] Timeout for message ' + item.tempId);
+          settled = true;
+          console.log('[OfflineQueue] Send timed out');
           resolve();
         }, 15000);
-
-        console.log('[OfflineQueue] Sending ' + item.tempId + ': "' + item.content.substring(0, 30) + '"');
 
         socket.emit('send_message', {
           matchId: item.matchId,
           content: item.content,
           mediaKeys: item.mediaKeys,
+          clientMessageId: item.tempId,
+          type: item.type,
+          metadata: item.metadata,
+          replyToId: item.replyToId,
         }, (response: any) => {
+          if (settled) return;
+          settled = true;
           clearTimeout(timeout);
+          if (!isCurrentAccount()) { resolve(); return; }
           if (response?.success) {
             successfulSends.push(item);
             // CRITICAL: Fire callback IMMEDIATELY so processedServerIdsRef is updated
@@ -108,21 +163,35 @@ export const retryOfflineMessages = async (
             if (onMessageConfirmed && response.message) {
               onMessageConfirmed(item, response.message);
             }
-            console.log('[OfflineQueue] ✓ Sent ' + item.tempId + ' -> server ID ' + (response.message?.id || 'unknown'));
+            console.log('[OfflineQueue] Queued message sent');
           } else {
-            console.log('[OfflineQueue] ✗ Failed ' + item.tempId + ':', response);
+            failureCode = typeof response?.code === 'string' ? response.code : 'REQUEST_FAILED';
+            console.log('[OfflineQueue] Queued message failed');
           }
           resolve();
         });
       });
     } catch (err) {
-      console.error('[OfflineQueue] Error retrying message ' + item.tempId + ':', err);
+      console.error('[OfflineQueue] Queued message retry failed');
+    }
+    // Keep later messages queued until this message has a server
+    // acknowledgement, but never let one undeliverable message block the
+    // conversation permanently.
+    if (!successfulSends.includes(item)) {
+      if (!isCurrentAccount()) break;
+      const decision = decideSendRetry(item.attempts, failureCode);
+      if (decision.action === 'drop') {
+        await recordAttempt(item.tempId, key, (item.attempts ?? 0) + 1, true);
+        continue;
+      }
+      await recordAttempt(item.tempId, key, decision.attempts);
+      break;
     }
   }
 
   // Remove successfully sent messages from queue
   for (const item of successfulSends) {
-    await removeFromQueue(item.tempId);
+    await removeFromAccountQueue(item.tempId, key);
   }
 
   return successfulSends;

@@ -12,6 +12,7 @@ import {
   Platform,
   Modal,
   Dimensions,
+  Keyboard,
 } from "react-native";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -31,6 +32,8 @@ export const NameSelectionScreen = () => {
   const slideAnim = useRef(new Animated.Value(30)).current;
   const modalScale = useRef(new Animated.Value(0.8)).current;
   const modalOpacity = useRef(new Animated.Value(0)).current;
+  const buttonKeyboardOffset = useRef(new Animated.Value(0)).current;
+  const initialWindowHeight = useRef(Dimensions.get("window").height);
 
   useEffect(() => {
     Animated.parallel([
@@ -47,8 +50,43 @@ export const NameSelectionScreen = () => {
     ]).start();
   }, []);
 
+  useEffect(() => {
+    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+    const showSubscription = Keyboard.addListener(showEvent, (event) => {
+      const resizedHeight = Math.max(
+        0,
+        initialWindowHeight.current - Dimensions.get("window").height
+      );
+      const requiredLift = Platform.OS === "android"
+        ? Math.max(0, event.endCoordinates.height - resizedHeight) + 12
+        : 0;
+
+      Animated.timing(buttonKeyboardOffset, {
+        toValue: -requiredLift,
+        duration: event.duration || 180,
+        useNativeDriver: true,
+      }).start();
+    });
+
+    const hideSubscription = Keyboard.addListener(hideEvent, (event) => {
+      Animated.timing(buttonKeyboardOffset, {
+        toValue: 0,
+        duration: event.duration || 180,
+        useNativeDriver: true,
+      }).start();
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [buttonKeyboardOffset]);
+
   const handleNext = () => {
     if (name.trim().length < 2) return;
+    Keyboard.dismiss();
     setShowModal(true);
     Animated.parallel([
       Animated.spring(modalScale, {
@@ -77,9 +115,9 @@ export const NameSelectionScreen = () => {
       <StatusBar barStyle="light-content" />
       
       <KeyboardAvoidingView 
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.keyboardView}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? -20 : 0}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? -20 : undefined}
       >
         <TouchableOpacity 
           style={styles.backButton}
@@ -106,13 +144,20 @@ export const NameSelectionScreen = () => {
           </Text>
         </Animated.View>
 
-        <TouchableOpacity 
-          style={[styles.nextButton, name.trim().length < 2 && styles.disabledButton]}
-          onPress={handleNext}
-          disabled={name.trim().length < 2}
+        <Animated.View
+          style={[
+            styles.nextButtonLift,
+            { transform: [{ translateY: buttonKeyboardOffset }] },
+          ]}
         >
-          <Text style={styles.nextButtonText}>Next</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.nextButton, name.trim().length < 2 && styles.disabledButton]}
+            onPress={handleNext}
+            disabled={name.trim().length < 2}
+          >
+            <Text style={styles.nextButtonText}>Next</Text>
+          </TouchableOpacity>
+        </Animated.View>
       </KeyboardAvoidingView>
 
       <Modal transparent visible={showModal} animationType="none">
@@ -185,11 +230,16 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.4)",
     fontWeight: "500",
   },
+  nextButtonLift: {
+    width: "100%",
+  },
   nextButton: {
     backgroundColor: "#FFF",
-    paddingVertical: 18,
-    borderRadius: 35,
+    width: "100%",
+    height: 56,
+    borderRadius: 28,
     alignItems: "center",
+    justifyContent: "center",
     marginTop: 20,
   },
   disabledButton: {

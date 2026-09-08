@@ -11,6 +11,7 @@ import {
   Platform,
   Modal,
   Dimensions,
+  Keyboard,
 } from "react-native";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -41,6 +42,8 @@ export const BirthdaySelectionScreen = () => {
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
+  const buttonKeyboardOffset = useRef(new Animated.Value(0)).current;
+  const initialWindowHeight = useRef(Dimensions.get("window").height);
 
   useEffect(() => {
     Animated.parallel([
@@ -56,6 +59,40 @@ export const BirthdaySelectionScreen = () => {
       }),
     ]).start();
   }, []);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+    const showSubscription = Keyboard.addListener(showEvent, (event) => {
+      const resizedHeight = Math.max(
+        0,
+        initialWindowHeight.current - Dimensions.get("window").height
+      );
+      const requiredLift = Platform.OS === "android"
+        ? Math.max(0, event.endCoordinates.height - resizedHeight)
+        : 0;
+
+      Animated.timing(buttonKeyboardOffset, {
+        toValue: -requiredLift,
+        duration: event.duration || 180,
+        useNativeDriver: true,
+      }).start();
+    });
+
+    const hideSubscription = Keyboard.addListener(hideEvent, (event) => {
+      Animated.timing(buttonKeyboardOffset, {
+        toValue: 0,
+        duration: event.duration || 180,
+        useNativeDriver: true,
+      }).start();
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [buttonKeyboardOffset]);
 
   const isValidRealDate = (d: string, m: string, y: string) => {
     const dayVal = parseInt(d);
@@ -108,7 +145,14 @@ export const BirthdaySelectionScreen = () => {
   };
 
   const handleKeyPress = (e: any, index: number, type: 'day' | 'month' | 'year') => {
-    if (e.nativeEvent.key === 'Backspace') {
+    const key = e.nativeEvent.key;
+
+    if (/^\d$/.test(key)) {
+      updateDigit(key, index, type);
+      return;
+    }
+
+    if (key === 'Backspace') {
       if (type === 'day' && index > 0 && !day[index]) {
         dayRefs.current[index - 1]?.focus();
       } else if (type === 'month') {
@@ -122,29 +166,39 @@ export const BirthdaySelectionScreen = () => {
   };
 
   const updateDigit = (val: string, index: number, type: 'day' | 'month' | 'year') => {
-    const digit = val.replace(/[^0-9]/g, "");
-    if (!digit && val !== "") return;
+    const digits = val.replace(/[^0-9]/g, "");
+    if (!digits && val !== "") return;
+
+    const currentDigit = type === 'day' ? day[index] : type === 'month' ? month[index] : year[index];
+    let digit = digits;
+
+    // A filled input can briefly contain the old and new digits. Keep the new one.
+    if (digits.length > 1) {
+      digit = currentDigit && digits.startsWith(currentDigit)
+        ? digits.slice(-1)
+        : digits.charAt(0);
+    }
 
     if (type === 'day') {
       if (index === 0 && parseInt(digit) > 3) return; // Day 1st digit can't be > 3
       const newDay = [...day];
       newDay[index] = digit;
       setDay(newDay);
-      if (digit && index < 1) dayRefs.current[index + 1]?.focus();
-      else if (digit && index === 1) monthRefs.current[0]?.focus();
+      if (digit && !currentDigit && index < 1) dayRefs.current[index + 1]?.focus();
+      else if (digit && !currentDigit && index === 1) monthRefs.current[0]?.focus();
     } else if (type === 'month') {
       if (index === 0 && parseInt(digit) > 1) return; // Month 1st digit can't be > 1
       const newMonth = [...month];
       newMonth[index] = digit;
       setMonth(newMonth);
-      if (digit && index < 1) monthRefs.current[index + 1]?.focus();
-      else if (digit && index === 1) yearRefs.current[0]?.focus();
+      if (digit && !currentDigit && index < 1) monthRefs.current[index + 1]?.focus();
+      else if (digit && !currentDigit && index === 1) yearRefs.current[0]?.focus();
     } else {
       if (index === 0 && parseInt(digit) > 2) return; // Year 1st digit reasonable check
       const newYear = [...year];
       newYear[index] = digit;
       setYear(newYear);
-      if (digit && index < 3) yearRefs.current[index + 1]?.focus();
+      if (digit && !currentDigit && index < 3) yearRefs.current[index + 1]?.focus();
     }
   };
 
@@ -158,9 +212,9 @@ export const BirthdaySelectionScreen = () => {
       <StatusBar barStyle="light-content" />
       
       <KeyboardAvoidingView 
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.keyboardView}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? -20 : 0}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? -20 : undefined}
       >
         <TouchableOpacity 
           style={styles.backButton}
@@ -182,7 +236,7 @@ export const BirthdaySelectionScreen = () => {
                 keyboardType="number-pad"
                 maxLength={1}
                 value={d}
-                 onChangeText={v => updateDigit(v, i, 'day')}
+                onChangeText={v => updateDigit(v, i, 'day')}
                 onKeyPress={e => handleKeyPress(e, i, 'day')}
                 placeholder="D"
                 placeholderTextColor="rgba(255,255,255,0.2)"
@@ -201,7 +255,7 @@ export const BirthdaySelectionScreen = () => {
                 keyboardType="number-pad"
                 maxLength={1}
                 value={m}
-                 onChangeText={v => updateDigit(v, i, 'month')}
+                onChangeText={v => updateDigit(v, i, 'month')}
                 onKeyPress={e => handleKeyPress(e, i, 'month')}
                 placeholder="M"
                 placeholderTextColor="rgba(255,255,255,0.2)"
@@ -220,7 +274,7 @@ export const BirthdaySelectionScreen = () => {
                 keyboardType="number-pad"
                 maxLength={1}
                 value={y}
-                 onChangeText={v => updateDigit(v, i, 'year')}
+                onChangeText={v => updateDigit(v, i, 'year')}
                 onKeyPress={e => handleKeyPress(e, i, 'year')}
                 placeholder="Y"
                 placeholderTextColor="rgba(255,255,255,0.2)"
@@ -242,15 +296,22 @@ export const BirthdaySelectionScreen = () => {
           )}
         </Animated.View>
 
-        <TouchableOpacity 
-          style={[styles.nextButton, (!isValidDate || updating) && styles.disabledButton]}
-          onPress={handleNext}
-          disabled={!isValidDate || updating}
+        <Animated.View
+          style={[
+            styles.nextButtonLift,
+            { transform: [{ translateY: buttonKeyboardOffset }] },
+          ]}
         >
-          <Text style={styles.nextButtonText}>
-            {updating ? "Saving..." : "Next"}
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.nextButton, (!isValidDate || updating) && styles.disabledButton]}
+            onPress={handleNext}
+            disabled={!isValidDate || updating}
+          >
+            <Text style={styles.nextButtonText}>
+              {updating ? "Saving..." : "Next"}
+            </Text>
+          </TouchableOpacity>
+        </Animated.View>
       </KeyboardAvoidingView>
     </View>
   );
@@ -263,7 +324,7 @@ const styles = StyleSheet.create({
   },
   keyboardView: {
     flex: 1,
-    paddingHorizontal: 32,
+    paddingHorizontal: 20,
     paddingTop: Platform.OS === "ios" ? 60 : 40,
     paddingBottom: 20,
   },
@@ -324,7 +385,7 @@ const styles = StyleSheet.create({
     fontSize: 20,
     color: "#FFF",
     fontWeight: "700",
-    marginTop: 20,
+    marginTop: 12,
     textAlign: "center",
     backgroundColor: "rgba(255,255,255,0.1)",
     paddingVertical: 8,
@@ -332,12 +393,18 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     alignSelf: "center",
   },
+  nextButtonLift: {
+    width: "100%",
+  },
   nextButton: {
     backgroundColor: "#FFF",
-    paddingVertical: 18,
-    borderRadius: 35,
+    width: "100%",
+    height: 56,
+    borderRadius: 28,
     alignItems: "center",
+    justifyContent: "center",
     marginTop: 20,
+    marginBottom: 10,
   },
   disabledButton: {
     opacity: 0.5,

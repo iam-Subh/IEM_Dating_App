@@ -1,0 +1,26 @@
+{
+  "date": "2026-09-07",
+  "environment": "Isolated local PostgreSQL 16 and Redis 7",
+  "productionChanged": false,
+  "apiBuild": "passed",
+  "scriptAndTestTypecheck": "passed",
+  "tests": { "passed": 83, "failed": 0, "httpFlow": 4, "algorithm": 27, "discoveryIntegration": 28, "securityIntegration": 19, "outboxIntegration": 5 },
+  "backfill": {
+    "scannedDocuments": 580000,
+    "dryRunChanges": 240000,
+    "appliedChanges": 240000,
+    "freshVerificationChanges": 0
+  },
+  "syntheticReciprocityEvaluation": {
+    "actors": 1000,
+    "evaluated": 190000,
+    "predicted": 190000,
+    "coverage": 1,
+    "brier": 0.12782173646532638,
+    "baselineBrier": 0.18808558687894114,
+    "logLoss": 0.37033386402112434
+  },
+  "mobile": { "typecheck": "passed", "androidExport": "passed", "modules": 2057 },
+  "benchmark": "discovery-v2-100000.json",
+  "limitation": "Synthetic verification. Does not establish live coverage, production capacity, or real-user match quality."
+}

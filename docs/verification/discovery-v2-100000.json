@@ -1,0 +1,278 @@
+{
+  "users": 100000,
+  "eligibleCandidates": 2000,
+  "historyRows": 480000,
+  "scope": "Local single-process warm synthetic benchmark. Verified campus pool of 2000 within a larger user table. Every eligible actor has 240 snapshots; online query reads at most 200. Not production throughput or match-quality evidence.",
+  "reports": [
+    {
+      "budget": 40,
+      "reciprocityEnabled": false,
+      "policy": 1,
+      "coverage": null,
+      "retrieval": {
+        "samples": 20,
+        "p50Ms": 18.892899999998917,
+        "p95Ms": 34.555499999998574,
+        "p99Ms": 58.56930000000284
+      },
+      "ranking": {
+        "samples": 20,
+        "p50Ms": 7.096499999999651,
+        "p95Ms": 15.023099999998522,
+        "p99Ms": 32.63100000000122
+      },
+      "reciprocity": {
+        "samples": 20,
+        "p50Ms": 0,
+        "p95Ms": 0,
+        "p99Ms": 0
+      },
+      "pageGeneration": {
+        "samples": 20,
+        "p50Ms": 100.4307000000008,
+        "p95Ms": 210.76629999999932,
+        "p99Ms": 358.8623000000007
+      },
+      "nextPage": {
+        "kind": "refill",
+        "samples": 20,
+        "p50Ms": 86.5506000000023,
+        "p95Ms": 195.73459999999977,
+        "p99Ms": 240.96830000000045
+      },
+      "stageMeans": {
+        "totalMs": 118.12299500000036,
+        "deckMs": 38.71171499999955,
+        "retrievalMs": 20.38620499999979,
+        "rankingMs": 10.417115000000559,
+        "claimMs": 28.67473000000009,
+        "receiptMs": 7.616485000000102
+      }
+    },
+    {
+      "budget": 40,
+      "reciprocityEnabled": true,
+      "policy": 1,
+      "coverage": 1,
+      "retrieval": {
+        "samples": 20,
+        "p50Ms": 20.380299999997078,
+        "p95Ms": 43.18279999999868,
+        "p99Ms": 48.4448999999986
+      },
+      "ranking": {
+        "samples": 20,
+        "p50Ms": 28.526699999998527,
+        "p95Ms": 47.33650000000125,
+        "p99Ms": 66.125
+      },
+      "reciprocity": {
+        "samples": 20,
+        "p50Ms": 21.201700000001438,
+        "p95Ms": 31.286700000000565,
+        "p99Ms": 44.99790000000212
+      },
+      "pageGeneration": {
+        "samples": 20,
+        "p50Ms": 112.4955000000009,
+        "p95Ms": 183.83069999999861,
+        "p99Ms": 201.03610000000117
+      },
+      "nextPage": {
+        "kind": "refill",
+        "samples": 20,
+        "p50Ms": 120.02040000000125,
+        "p95Ms": 209.69720000000234,
+        "p99Ms": 211.70769999999902
+      },
+      "stageMeans": {
+        "totalMs": 119.93849500000015,
+        "deckMs": 53.7542449999999,
+        "retrievalMs": 19.726785000000017,
+        "rankingMs": 30.861564999999974,
+        "claimMs": 20.341405000000485,
+        "receiptMs": 8.694104999999762
+      }
+    },
+    {
+      "budget": 400,
+      "reciprocityEnabled": false,
+      "policy": 1,
+      "coverage": null,
+      "retrieval": {
+        "samples": 20,
+        "p50Ms": 41.53440000000046,
+        "p95Ms": 71.92090000000098,
+        "p99Ms": 72.64459999999963
+      },
+      "ranking": {
+        "samples": 20,
+        "p50Ms": 28.048099999999977,
+        "p95Ms": 44.050999999999476,
+        "p99Ms": 171.47409999999945
+      },
+      "reciprocity": {
+        "samples": 20,
+        "p50Ms": 0,
+        "p95Ms": 0,
+        "p99Ms": 0
+      },
+      "pageGeneration": {
+        "samples": 20,
+        "p50Ms": 137.8721000000005,
+        "p95Ms": 340.54030000000057,
+        "p99Ms": 426.4910999999993
+      },
+      "nextPage": {
+        "kind": "cached",
+        "samples": 20,
+        "p50Ms": 66.2554999999993,
+        "p95Ms": 209.44700000000012,
+        "p99Ms": 517.7620999999999
+      },
+      "stageMeans": {
+        "totalMs": 169.7807649999997,
+        "deckMs": 85.9058500000001,
+        "retrievalMs": 43.832164999999804,
+        "rankingMs": 33.09207499999975,
+        "claimMs": 27.666305000000648,
+        "receiptMs": 9.369469999999819
+      }
+    },
+    {
+      "budget": 400,
+      "reciprocityEnabled": true,
+      "policy": 1,
+      "coverage": 1,
+      "retrieval": {
+        "samples": 20,
+        "p50Ms": 42.272100000001956,
+        "p95Ms": 73.63350000000355,
+        "p99Ms": 95.35190000000148
+      },
+      "ranking": {
+        "samples": 20,
+        "p50Ms": 198.91670000000158,
+        "p95Ms": 229.70910000000003,
+        "p99Ms": 266.52270000000135
+      },
+      "reciprocity": {
+        "samples": 20,
+        "p50Ms": 167.17980000000534,
+        "p95Ms": 202.49459999999817,
+        "p99Ms": 202.95190000000002
+      },
+      "pageGeneration": {
+        "samples": 20,
+        "p50Ms": 330.9461999999985,
+        "p95Ms": 411.0897000000041,
+        "p99Ms": 429.1727000000028
+      },
+      "nextPage": {
+        "kind": "cached",
+        "samples": 20,
+        "p50Ms": 68.93660000000091,
+        "p95Ms": 96.17640000000392,
+        "p99Ms": 107.02700000000186
+      },
+      "stageMeans": {
+        "totalMs": 331.59240499999976,
+        "deckMs": 251.5398049999996,
+        "retrievalMs": 42.54920500000044,
+        "rankingMs": 199.9060599999997,
+        "claimMs": 26.65421499999975,
+        "receiptMs": 9.022565000000395
+      }
+    },
+    {
+      "budget": 800,
+      "reciprocityEnabled": false,
+      "policy": 1,
+      "coverage": null,
+      "retrieval": {
+        "samples": 20,
+        "p50Ms": 57.5144999999975,
+        "p95Ms": 75.02599999999802,
+        "p99Ms": 107.10139999999956
+      },
+      "ranking": {
+        "samples": 20,
+        "p50Ms": 53.222099999999045,
+        "p95Ms": 86.54469999999856,
+        "p99Ms": 94.3041000000012
+      },
+      "reciprocity": {
+        "samples": 20,
+        "p50Ms": 0,
+        "p95Ms": 0,
+        "p99Ms": 0
+      },
+      "pageGeneration": {
+        "samples": 20,
+        "p50Ms": 177.83370000000286,
+        "p95Ms": 221.15110000000277,
+        "p99Ms": 231.42029999999795
+      },
+      "nextPage": {
+        "kind": "cached",
+        "samples": 20,
+        "p50Ms": 63.665399999998044,
+        "p95Ms": 115.43560000000434,
+        "p99Ms": 124.92960000000312
+      },
+      "stageMeans": {
+        "totalMs": 182.1507200000011,
+        "deckMs": 116.1544449999994,
+        "retrievalMs": 57.08559000000023,
+        "rankingMs": 52.50705999999955,
+        "claimMs": 21.21668999999856,
+        "receiptMs": 8.1208550000003
+      }
+    },
+    {
+      "budget": 800,
+      "reciprocityEnabled": true,
+      "policy": 1,
+      "coverage": 1,
+      "retrieval": {
+        "samples": 20,
+        "p50Ms": 49.90450000000419,
+        "p95Ms": 75.46659999999974,
+        "p99Ms": 88.03759999999602
+      },
+      "ranking": {
+        "samples": 20,
+        "p50Ms": 365.2878000000055,
+        "p95Ms": 385.90869999999995,
+        "p99Ms": 395.7033999999985
+      },
+      "reciprocity": {
+        "samples": 20,
+        "p50Ms": 303.0278000000035,
+        "p95Ms": 332.38850000000093,
+        "p99Ms": 341.86440000000584
+      },
+      "pageGeneration": {
+        "samples": 20,
+        "p50Ms": 508.68249999999534,
+        "p95Ms": 572.7001000000018,
+        "p99Ms": 582.707699999999
+      },
+      "nextPage": {
+        "kind": "cached",
+        "samples": 20,
+        "p50Ms": 73.216499999995,
+        "p95Ms": 116.33499999999185,
+        "p99Ms": 145.43469999999797
+      },
+      "stageMeans": {
+        "totalMs": 505.7294500000029,
+        "deckMs": 431.5298899999969,
+        "retrievalMs": 56.39773000000132,
+        "rankingMs": 369.00411000000094,
+        "claimMs": 24.50334000000621,
+        "receiptMs": 9.620304999998552
+      }
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+diff --git a/node_modules/@siteed/audio-studio/plugin/build/index.js b/node_modules/@siteed/audio-studio/plugin/build/index.js
+index 5b0864d..735d4d3 100644
+--- a/node_modules/@siteed/audio-studio/plugin/build/index.js
++++ b/node_modules/@siteed/audio-studio/plugin/build/index.js
+@@ -1,7 +1,7 @@
+ "use strict";
+ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.__testing = void 0;
+-const config_plugins_1 = require("@expo/config-plugins");
++const config_plugins_1 = require("expo/config-plugins");
+ const MICROPHONE_USAGE = 'Allow $(PRODUCT_NAME) to access your microphone';
+ const NOTIFICATION_USAGE = 'Show recording notifications and controls';
+ const LOG_PREFIX = '[@siteed/expo-audio-studio]';
+diff --git a/node_modules/@siteed/audio-studio/plugin/src/index.ts b/node_modules/@siteed/audio-studio/plugin/src/index.ts
+index ff1ed8a..77324cd 100644
+--- a/node_modules/@siteed/audio-studio/plugin/src/index.ts
++++ b/node_modules/@siteed/audio-studio/plugin/src/index.ts
+@@ -3,7 +3,7 @@ import {
+     withAndroidManifest,
+     withInfoPlist,
+     AndroidConfig,
+-} from '@expo/config-plugins'
++} from 'expo/config-plugins'
+ import { ExpoConfig } from '@expo/config-types'
+ 
+ const MICROPHONE_USAGE = 'Allow $(PRODUCT_NAME) to access your microphone'

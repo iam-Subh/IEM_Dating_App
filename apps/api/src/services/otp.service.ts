@@ -1,90 +1,122 @@
+import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'crypto';
 import { redisClient } from '../utils/redis';
-import { logger } from '../utils/logger';
+import { HttpError } from '../utils/httpError';
 
-const OTP_TTL = 300; // 5 minutes
-const OTP_PREFIX = 'otp:';
-const OTP_ATTEMPTS_PREFIX = 'otp_attempts:';
+const OTP_TTL_SECONDS = 300;
+const PROOF_TTL_SECONDS = 600;
+const RESEND_SECONDS = 60;
 const MAX_ATTEMPTS = 5;
-const RATE_LIMIT_PREFIX = 'otp_rate:';
-const RATE_LIMIT_WINDOW = 60; // 1 minute between sends
+
+export type OTPPurpose = 'registration' | 'phone_login' | 'student_membership' | 'password_recovery';
+
+function secret(): string {
+  const value = process.env.OTP_HMAC_SECRET;
+  if (!value || value.length < 32 || value.startsWith('your-')) {
+    throw new Error('OTP_HMAC_SECRET must contain at least 32 characters');
+  }
+  return value;
+}
+
+function normalize(identifier: string): string {
+  return identifier.trim().toLowerCase();
+}
+
+function hmac(value: string): string {
+  return createHmac('sha256', secret()).update(value).digest('hex');
+}
+
+function equalHex(left: string, right: string): boolean {
+  const a = Buffer.from(left, 'hex');
+  const b = Buffer.from(right, 'hex');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+export function validateOTPConfiguration(): void {
+  secret();
+}
 
 export class OTPService {
-  /**
-   * Generate a random 6-digit code
-   */
-  static generate(): string {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+  static async issue(identifier: string, purpose: OTPPurpose) {
+    const normalized = normalize(identifier);
+    const identityHash = hmac(normalized);
+    const challengeId = randomUUID();
+    const code = randomInt(100000, 1000000).toString();
+    const digest = hmac(`${challengeId}:${purpose}:${identityHash}:${code}`);
+    const result = Number(await redisClient.eval(
+      `if redis.call('exists', KEYS[1]) == 1 then return 0 end
+       redis.call('set', KEYS[1], '1', 'EX', ARGV[1])
+       redis.call('hset', KEYS[2], 'digest', ARGV[2], 'attempts', '0')
+       redis.call('expire', KEYS[2], ARGV[3])
+       return 1`,
+      2,
+      `otp:cooldown:${purpose}:${identityHash}`,
+      `otp:challenge:${challengeId}`,
+      RESEND_SECONDS,
+      digest,
+      OTP_TTL_SECONDS,
+    ));
+    if (result !== 1) {
+      throw new HttpError(429, 'Please wait before requesting a new code', 'OTP_RATE_LIMITED');
+    }
+    return { challengeId, code, expiresIn: OTP_TTL_SECONDS };
   }
 
-  /**
-   * Check if we can send a new OTP (rate limiting)
-   */
-  static async canSend(email: string): Promise<boolean> {
-    const key = `${RATE_LIMIT_PREFIX}${email.toLowerCase()}`;
-    const exists = await redisClient.exists(key);
-    return !exists;
+  static async cancel(challengeId: string): Promise<void> {
+    await redisClient.del(`otp:challenge:${challengeId}`);
   }
 
-  /**
-   * Store OTP in Redis with 5-minute TTL
-   */
-  static async store(email: string, code: string): Promise<void> {
-    const otpKey = `${OTP_PREFIX}${email.toLowerCase()}`;
-    const rateKey = `${RATE_LIMIT_PREFIX}${email.toLowerCase()}`;
-    const attemptsKey = `${OTP_ATTEMPTS_PREFIX}${email.toLowerCase()}`;
+  static async verify(identifier: string, purpose: OTPPurpose, challengeId: string, code: string) {
+    const identityHash = hmac(normalize(identifier));
+    const expected = hmac(`${challengeId}:${purpose}:${identityHash}:${code}`);
+    const result = await redisClient.eval(
+      `if redis.call('exists', KEYS[1]) == 0 then return {'expired', ''} end
+       local attempts = redis.call('hincrby', KEYS[1], 'attempts', 1)
+       local stored = redis.call('hget', KEYS[1], 'digest')
+       if attempts > tonumber(ARGV[1]) then
+         redis.call('del', KEYS[1])
+         return {'exhausted', ''}
+       end
+       if stored == ARGV[2] then
+         redis.call('del', KEYS[1])
+         return {'valid', ''}
+       end
+       return {'invalid', tostring(tonumber(ARGV[1]) - attempts)}`,
+      1,
+      `otp:challenge:${challengeId}`,
+      MAX_ATTEMPTS,
+      expected,
+    ) as [string, string];
 
-    // Store the code with TTL
-    await redisClient.set(otpKey, code, 'EX', OTP_TTL);
-
-    // Set rate limit (1 send per minute)
-    await redisClient.set(rateKey, '1', 'EX', RATE_LIMIT_WINDOW);
-
-    // Reset attempt counter
-    await redisClient.del(attemptsKey);
-
-    logger.info(`OTP stored for ${email}, expires in ${OTP_TTL}s`);
+    if (result[0] === 'valid') return { valid: true as const };
+    if (result[0] === 'expired') return { valid: false as const, error: 'Code expired. Request a new code.' };
+    if (result[0] === 'exhausted') return { valid: false as const, error: 'Too many attempts. Request a new code.' };
+    return { valid: false as const, error: `Invalid code. ${result[1]} attempts remaining.` };
   }
 
-  /**
-   * Verify the OTP code
-   * Returns: { valid: boolean, error?: string }
-   */
-  static async verify(email: string, code: string): Promise<{ valid: boolean; error?: string }> {
-    const normalizedEmail = email.toLowerCase();
-    const otpKey = `${OTP_PREFIX}${normalizedEmail}`;
-    const attemptsKey = `${OTP_ATTEMPTS_PREFIX}${normalizedEmail}`;
+  static async createProof(identifier: string, purpose: OTPPurpose): Promise<string> {
+    const token = randomUUID();
+    await redisClient.set(
+      `otp:proof:${token}`,
+      hmac(`${purpose}:${normalize(identifier)}`),
+      'EX',
+      PROOF_TTL_SECONDS,
+    );
+    return token;
+  }
 
-    // Check attempt count
-    const attempts = await redisClient.incr(attemptsKey);
-    if (attempts === 1) {
-      // Set expiry on first attempt
-      await redisClient.expire(attemptsKey, OTP_TTL);
+  static async consumeProof(identifier: string, purpose: OTPPurpose, token: string): Promise<void> {
+    const expected = hmac(`${purpose}:${normalize(identifier)}`);
+    const stored = await redisClient.eval(
+      `local value = redis.call('get', KEYS[1])
+       if not value then return '' end
+       if value == ARGV[1] then redis.call('del', KEYS[1]); return value end
+       return ''`,
+      1,
+      `otp:proof:${token}`,
+      expected,
+    ) as string;
+    if (!stored || !equalHex(stored, expected)) {
+      throw new HttpError(400, 'Verification proof is invalid or expired', 'INVALID_VERIFICATION_PROOF');
     }
-
-    if (attempts > MAX_ATTEMPTS) {
-      // Too many attempts — delete the OTP
-      await redisClient.del(otpKey);
-      await redisClient.del(attemptsKey);
-      return { valid: false, error: 'Too many attempts. Please request a new code.' };
-    }
-
-    // Get stored code
-    const storedCode = await redisClient.get(otpKey);
-
-    if (!storedCode) {
-      return { valid: false, error: 'Code expired. Please request a new one.' };
-    }
-
-    if (storedCode !== code) {
-      const remaining = MAX_ATTEMPTS - attempts;
-      return { valid: false, error: `Invalid code. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.` };
-    }
-
-    // Success — clean up
-    await redisClient.del(otpKey);
-    await redisClient.del(attemptsKey);
-
-    logger.info(`OTP verified successfully for ${normalizedEmail}`);
-    return { valid: true };
   }
 }

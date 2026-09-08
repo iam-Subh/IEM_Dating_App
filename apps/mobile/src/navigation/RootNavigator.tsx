@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../store';
 import { Text, View } from 'react-native';
+import { Linking } from 'react-native';
+import * as Notifications from 'expo-notifications';
 
 const Stack = createNativeStackNavigator();
 
@@ -31,9 +33,36 @@ import { EditBioScreen } from '../screens/main/edit/EditBioScreen';
 import { EditHeightScreen } from '../screens/main/edit/EditHeightScreen';
 import { EditResidencyScreen } from '../screens/main/edit/EditResidencyScreen';
 import { EditYearScreen } from '../screens/main/edit/EditYearScreen';
+import { RequiredDiscoveryPreferencesScreen } from '../features/auth/screens/RequiredDiscoveryPreferencesScreen';
+import { StudentVerificationScreen } from '../features/auth/screens/StudentVerificationScreen';
+import { api } from '../services/api';
+import { credentialStore } from '../services/credentialStore';
+import { logout, setCredentials } from '../store/authSlice';
+import { registerCurrentDeviceForPush } from '../services/notifications';
+import { CreateStoryScreen } from '../screens/main/CreateStoryScreen';
+import { StoryViewerScreen } from '../screens/main/StoryViewerScreen';
+import { FollowRequestsScreen } from '../screens/main/FollowRequestsScreen';
+import { ActiveSessionsScreen } from '../screens/main/ActiveSessionsScreen';
+import { BlockedAccountsScreen } from '../screens/main/BlockedAccountsScreen';
+import { MessageSearchScreen } from '../screens/main/MessageSearchScreen';
 
 const linking = {
   prefixes: ['http://localhost:8081', 'iemdating://'],
+  async getInitialURL() {
+    const url = await Linking.getInitialURL();
+    if (url) return url;
+    const response = Notifications.getLastNotificationResponse();
+    const notificationUrl = response?.notification.request.content.data?.url;
+    return typeof notificationUrl === 'string' ? notificationUrl : null;
+  },
+  subscribe(listener: (url: string) => void) {
+    const link = Linking.addEventListener('url', ({ url }) => listener(url));
+    const notification = Notifications.addNotificationResponseReceivedListener((response) => {
+      const url = response.notification.request.content.data?.url;
+      if (typeof url === 'string') listener(url);
+    });
+    return () => { link.remove(); notification.remove(); };
+  },
   config: {
     screens: {
       Auth: {
@@ -66,7 +95,9 @@ const linking = {
         }
       },
       PhotoUpload: 'PhotoUpload',
-      ChatScreen: 'ChatScreen',
+      ChatScreen: 'chat/:matchId',
+      StoryViewer: 'stories/:storyId',
+      FollowRequests: 'stories/follow-requests',
       EditProfile: 'EditProfile',
       EditGender: 'EditGender',
       EditSeeking: 'EditSeeking',
@@ -87,20 +118,66 @@ const linking = {
       EditResidency: 'EditResidency',
       EditYear: 'EditYear',
       Settings: 'Settings',
+      ActiveSessions: 'settings/sessions',
+      BlockedAccounts: 'settings/blocked',
+      MessageSearch: 'messages/search',
     }
   }
 };
 
 export const RootNavigator = () => {
+  const dispatch = useDispatch();
+  const [bootstrapping, setBootstrapping] = useState(true);
   const isAuthenticated = useSelector((state: RootState) => state.auth.isAuthenticated);
+  const token = useSelector((state: RootState) => state.auth.token);
+  const nextRequiredStep = useSelector((state: RootState) => state.auth.nextRequiredStep);
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (token) { if (active) setBootstrapping(false); return; }
+      const refreshToken = await credentialStore.getRefreshToken();
+      if (!refreshToken) { if (active) setBootstrapping(false); return; }
+      try {
+        const response = await api.post('/auth/refresh', { refreshToken });
+        const data = response.data.data;
+        await credentialStore.setRefreshToken(data.refreshToken);
+        dispatch(setCredentials({ user: data.user, token: data.accessToken, nextRequiredStep: data.onboarding?.nextRequiredStep }));
+      } catch {
+        await credentialStore.clear();
+        dispatch(logout());
+      } finally {
+        if (active) setBootstrapping(false);
+      }
+    })();
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
+    if (!isAuthenticated || !token) return;
+    registerCurrentDeviceForPush().catch(() => undefined);
+  }, [isAuthenticated, token]);
+  if (bootstrapping) return <View />;
+  const needsStudentVerification = !!token && nextRequiredStep === 'studentVerification';
+  const needsProfile = !!token && nextRequiredStep === 'profile';
+  const needsDiscoveryPreferences = useSelector((state: RootState) =>
+    !!state.auth.token && (
+      state.auth.nextRequiredStep === 'discoveryPreferences' ||
+      (state.auth.isAuthenticated && !state.auth.user?.preferencesConfirmedAt)
+    )
+  );
 
   return (
     <NavigationContainer linking={linking}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {isAuthenticated ? (
+        {needsStudentVerification ? (
+          <Stack.Screen name="StudentVerification" component={StudentVerificationScreen} />
+        ) : needsDiscoveryPreferences ? (
+          <Stack.Screen name="RequiredDiscoveryPreferences" component={RequiredDiscoveryPreferencesScreen} />
+        ) : isAuthenticated ? (
           <Stack.Screen name="Main" component={MainTabNavigator} />
         ) : (
-          <Stack.Screen name="Auth" component={AuthNavigator} />
+          <Stack.Screen name="Auth">
+            {() => <AuthNavigator initialRouteName={needsProfile ? 'HouseRules' : 'Welcome'} />}
+          </Stack.Screen>
         )}
         <Stack.Screen name="PhotoUpload" component={PhotoUploadScreen} />
         <Stack.Screen name="ChatScreen" component={ChatScreen} />
@@ -124,6 +201,12 @@ export const RootNavigator = () => {
         <Stack.Screen name="EditResidency" component={EditResidencyScreen} options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="EditYear" component={EditYearScreen} options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="Settings" component={SettingsScreen} />
+        <Stack.Screen name="CreateStory" component={CreateStoryScreen} />
+        <Stack.Screen name="StoryViewer" component={StoryViewerScreen} />
+        <Stack.Screen name="FollowRequests" component={FollowRequestsScreen} />
+        <Stack.Screen name="ActiveSessions" component={ActiveSessionsScreen} />
+        <Stack.Screen name="BlockedAccounts" component={BlockedAccountsScreen} />
+        <Stack.Screen name="MessageSearch" component={MessageSearchScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

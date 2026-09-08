@@ -13,5 +13,7 @@ router.post('/report', protect, validateRequest(reportSchema), SafetyController.
 // Admin endpoints — manage reports
 router.get('/reports', protect, adminGuard, SafetyController.getReports);
 router.patch('/reports/:id/resolve', protect, adminGuard, SafetyController.resolveReport);
+router.get('/cases', protect, adminGuard, SafetyController.getCases);
+router.patch('/cases/:id', protect, adminGuard, SafetyController.updateCase);
 
 export default router;

@@ -41,7 +41,7 @@ export const EditBatchScreen = () => {
     if (!selected) return;
     setSaving(true);
     try {
-      const response = await api.put('/profile', { year: selected });
+      const response = await api.put('/profile', { graduationYear: selected });
       if (response.data?.success) {
         dispatch(updateUser(response.data.data));
       }

@@ -7,11 +7,7 @@ interface ProfileVerificationProps {
 }
 
 export const ProfileVerification: React.FC<ProfileVerificationProps> = ({ user }) => {
-  const verifications = user.verifications || [
-    'College ID Verified (IEM Student)',
-    'Face Video Verified',
-    'Phone Number Verified'
-  ];
+  const verifications = Array.isArray(user.verifications) ? user.verifications : [];
 
   if (!verifications || verifications.length === 0) return null;
 

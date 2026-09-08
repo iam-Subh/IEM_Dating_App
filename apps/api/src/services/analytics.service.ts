@@ -17,11 +17,7 @@ export class AnalyticsService {
     userId?: string
   ): Promise<void> {
     // Log to Winston (real-time)
-    logger.info(`[ANALYTICS] ${eventType}`, {
-      event: eventType,
-      ...data,
-      timestamp: new Date().toISOString(),
-    });
+    logger.info(`[ANALYTICS] ${eventType}`);
 
     // Persist to DB (queryable)
     try {
@@ -67,15 +63,6 @@ export class AnalyticsService {
     this.trackEvent('message_sent', data, data.senderId);
   }
 
-  static trackRecommendation(data: {
-    userId: string;
-    candidatesScored: number;
-    topScore: number;
-    cacheHit: boolean;
-    durationMs: number;
-  }): void {
-    this.trackEvent('recommendations_generated', data, data.userId);
-  }
 
   static trackReport(data: {
     reportId: string;

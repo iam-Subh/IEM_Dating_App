@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useEffect, useRef } from "react";
+import { compatibilityValue, compatibilityColor, compatibilityLabel } from '../compatibility';
+import React, { useState, useMemo, useEffect } from "react";
 import {
   View,
   Text,
@@ -20,18 +21,18 @@ import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 import { colors } from "../../../core/theme/colors";
-import { Video, ResizeMode } from "expo-av";
+import { VideoView, useVideoPlayer } from "expo-video";
 import { ProfileDetailModal } from "./profile-detail/ProfileDetailModal";
 
 interface SwipeCardProps {
   user: {
     id: string;
     name: string;
-    year: string;
+    graduationYear: number | null;
     department: string;
     imageUri: string;
     intent: string;
-    matchPercentage?: number;
+    matchPercentage?: number | null;
     distance?: string;
     tags?: string[];
     photos?: string[];
@@ -43,6 +44,78 @@ interface SwipeCardProps {
   onStar?: () => void;
   isActiveCard?: boolean;
 }
+
+interface CardVideoProps {
+  uri: string;
+  active: boolean;
+  muted: boolean;
+  loop: boolean;
+  style: any;
+  onReady: () => void;
+  onError: () => void;
+  onProgress?: (currentTime: number, duration: number) => void;
+  onFinish?: () => void;
+}
+
+const CardVideo: React.FC<CardVideoProps> = ({
+  uri,
+  active,
+  muted,
+  loop,
+  style,
+  onReady,
+  onError,
+  onProgress,
+  onFinish,
+}) => {
+  const player = useVideoPlayer({ uri }, (videoPlayer) => {
+    videoPlayer.loop = loop;
+    videoPlayer.muted = muted;
+    videoPlayer.timeUpdateEventInterval = 0.1;
+  });
+
+  useEffect(() => {
+    player.loop = loop;
+    player.muted = muted;
+
+    if (active) {
+      player.play();
+      return;
+    }
+
+    player.pause();
+    player.currentTime = 0;
+  }, [active, loop, muted, player]);
+
+  useEffect(() => {
+    const statusSubscription = player.addListener('statusChange', ({ status }) => {
+      if (status === 'error') onError();
+    });
+    const timeSubscription = player.addListener('timeUpdate', ({ currentTime }) => {
+      if (active && onProgress) onProgress(currentTime, player.duration);
+    });
+    const endSubscription = player.addListener('playToEnd', () => {
+      player.currentTime = 0;
+      onFinish?.();
+    });
+
+    return () => {
+      statusSubscription.remove();
+      timeSubscription.remove();
+      endSubscription.remove();
+    };
+  }, [active, onError, onFinish, onProgress, player]);
+
+  return (
+    <VideoView
+      player={player}
+      style={style}
+      contentFit="cover"
+      nativeControls={false}
+      onFirstFrameRender={onReady}
+    />
+  );
+};
 
 export const SwipeCard: React.FC<SwipeCardProps> = ({
   user,
@@ -57,10 +130,6 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
   const [fullVideoReady, setFullVideoReady] = useState(false);
   const [mediaError, setMediaError] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
-
-  const videoRef = useRef<any>(null);
-  const fullVideoRef = useRef<any>(null);
-  const prevIndexRef = useRef(0);
 
   const mediaItems = useMemo(() => {
     const items: {
@@ -84,10 +153,6 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
     return items;
   }, [user.video, user.videoPreview, user.photos, user.imageUri]);
 
-  const videoIndex = useMemo(
-    () => mediaItems.findIndex((m) => m.type === "video"),
-    [mediaItems],
-  );
   const currentMedia = mediaItems[currentIndex] || mediaItems[0];
 
   useEffect(() => {
@@ -137,15 +202,6 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
   };
 
   useEffect(() => {
-    const prevIndex = prevIndexRef.current;
-    if (prevIndex === videoIndex && currentIndex !== videoIndex) {
-      if (videoRef.current) videoRef.current.setPositionAsync(0);
-      if (fullVideoRef.current) fullVideoRef.current.setPositionAsync(0);
-    }
-    prevIndexRef.current = currentIndex;
-  }, [currentIndex, videoIndex]);
-
-  useEffect(() => {
     progress.value = 0;
 
     if (currentMedia && currentMedia.type === "image") {
@@ -165,12 +221,8 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
     };
   }, [currentIndex, currentMedia]);
 
-  const matchPercentage = user.matchPercentage || 98;
-  const getBadgeColor = (percentage: number) => {
-    if (percentage >= 60) return "#4ade80"; // Green
-    if (percentage >= 40) return "#facc15"; // Yellow
-    return "#f87171"; // Red
-  };
+  const matchPercentage = compatibilityValue(user.matchPercentage);
+  const getBadgeColor = compatibilityColor;
 
   const showFallback = mediaError || mediaItems.length === 0 || !currentMedia;
 
@@ -228,57 +280,41 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
                                 />
                               </View>
                             )}
-                            <Video
-                              ref={videoRef}
-                              source={{ uri: item.previewUri }}
+                            <CardVideo
+                              uri={item.previewUri}
                               style={[
                                 StyleSheet.absoluteFill,
                                 { opacity: fullVideoReady ? 0 : 1 },
                               ]}
-                              resizeMode={ResizeMode.COVER}
-                              shouldPlay={
+                              active={
                                 isActiveCard && isActive && !fullVideoReady
                               }
-                              isLooping={true}
-                              isMuted={isMuted}
-                              onReadyForDisplay={() => setVideoReady(true)}
+                              loop
+                              muted={isMuted}
+                              onReady={() => setVideoReady(true)}
                               onError={handleMediaError}
                             />
-                            <Video
-                              ref={fullVideoRef}
-                              source={{ uri: item.uri }}
+                            <CardVideo
+                              uri={item.uri}
                               style={[
                                 StyleSheet.absoluteFill,
                                 { opacity: fullVideoReady ? 1 : 0 },
                               ]}
-                              resizeMode={ResizeMode.COVER}
-                              shouldPlay={
+                              active={
                                 isActiveCard && isActive && fullVideoReady
                               }
-                              isLooping={false}
-                              isMuted={isMuted}
-                              onReadyForDisplay={() => setFullVideoReady(true)}
+                              loop={false}
+                              muted={isMuted}
+                              onReady={() => setFullVideoReady(true)}
                               onError={handleMediaError}
-                              onPlaybackStatusUpdate={(status: any) => {
-                                if (
-                                  isActive &&
-                                  fullVideoReady &&
-                                  status.isLoaded
-                                ) {
-                                  if (
-                                    status.durationMillis &&
-                                    status.positionMillis
-                                  ) {
-                                    progress.value =
-                                      status.positionMillis /
-                                      status.durationMillis;
-                                  }
-                                  if (status.didJustFinish) {
-                                    fullVideoRef.current?.setPositionAsync(0);
-                                    if (currentIndex < mediaItems.length - 1) {
-                                      setCurrentIndex((prev) => prev + 1);
-                                    }
-                                  }
+                              onProgress={(currentTime, duration) => {
+                                if (isActive && fullVideoReady && duration > 0) {
+                                  progress.value = currentTime / duration;
+                                }
+                              }}
+                              onFinish={() => {
+                                if (currentIndex < mediaItems.length - 1) {
+                                  setCurrentIndex((prev) => prev + 1);
                                 }
                               }}
                             />
@@ -302,35 +338,25 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
                                 />
                               </View>
                             )}
-                            <Video
-                              ref={videoRef}
-                              source={{ uri: item.uri }}
+                            <CardVideo
+                              uri={item.uri}
                               style={[
                                 StyleSheet.absoluteFill,
                                 { opacity: videoReady ? 1 : 0 },
                               ]}
-                              resizeMode={ResizeMode.COVER}
-                              shouldPlay={isActiveCard && isActive}
-                              isLooping={false}
-                              isMuted={isMuted}
-                              onReadyForDisplay={() => setVideoReady(true)}
+                              active={isActiveCard && isActive}
+                              loop={false}
+                              muted={isMuted}
+                              onReady={() => setVideoReady(true)}
                               onError={handleMediaError}
-                              onPlaybackStatusUpdate={(status: any) => {
-                                if (isActive && status.isLoaded) {
-                                  if (
-                                    status.durationMillis &&
-                                    status.positionMillis
-                                  ) {
-                                    progress.value =
-                                      status.positionMillis /
-                                      status.durationMillis;
-                                  }
-                                  if (status.didJustFinish) {
-                                    videoRef.current?.setPositionAsync(0);
-                                    if (currentIndex < mediaItems.length - 1) {
-                                      setCurrentIndex((prev) => prev + 1);
-                                    }
-                                  }
+                              onProgress={(currentTime, duration) => {
+                                if (isActive && duration > 0) {
+                                  progress.value = currentTime / duration;
+                                }
+                              }}
+                              onFinish={() => {
+                                if (currentIndex < mediaItems.length - 1) {
+                                  setCurrentIndex((prev) => prev + 1);
                                 }
                               }}
                             />
@@ -419,7 +445,7 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
                   { color: getBadgeColor(matchPercentage) },
                 ]}
               >
-                Match {matchPercentage}%
+                {compatibilityLabel(matchPercentage)}
               </Text>
               {currentMedia &&
                 currentMedia.type === "video" &&
@@ -450,9 +476,9 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
                 {/* ROW 1: Name, Year, Verification, Online Status */}
                 <View style={styles.nameRow}>
                   <Text style={[styles.name, styles.shadowText]}>
-                    {user.name.split(" ")[0]}, {user.year.replace(" Year", "")}
+                    {user.name.split(" ")[0]}{user.graduationYear ? `, Class of ${user.graduationYear}` : ''}
                   </Text>
-                  {(user as any).isVerified || (user as any).phone ? (
+                  {(user as any).isVerified ? (
                     <View style={styles.verifiedBadgeContainer}>
                       <View style={styles.verifiedBadgeBackground} />
                       <MaterialIcons name="verified" size={20} color="#3b82f6" />
@@ -541,7 +567,7 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   tapZonesContainer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     flexDirection: "row",
     zIndex: 5,
     elevation: 5,

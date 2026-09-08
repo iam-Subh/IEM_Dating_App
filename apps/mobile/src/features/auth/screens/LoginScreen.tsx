@@ -14,7 +14,7 @@ import {
   BackHandler,
   ScrollView,
 } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useDispatch } from 'react-redux';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AnimatedInput } from '../../../components/ui/AnimatedInput';
@@ -22,6 +22,7 @@ import { AnimatedBlurBackground } from '../../../components/ui/AnimatedBlurBackg
 import { colors } from '../../../core/theme/colors';
 import { api } from '../../../services/api';
 import { setCredentials } from '../../../store/authSlice';
+import { credentialStore } from '../../../services/credentialStore';
 
 export const LoginScreen = () => {
   const navigation = useNavigation<any>();
@@ -34,6 +35,15 @@ export const LoginScreen = () => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  // This screen stays mounted in the navigation stack, so returning to it
+  // after a successful save would otherwise leave a stuck loading button
+  // that is also disabled. Clearing on focus covers every exit path.
+  useFocusEffect(
+    React.useCallback(() => {
+      setLoading(false);
+    }, [])
+  );
+
   const [error, setError] = useState('');
   const [showEmailForm, setShowEmailForm] = useState(initialForm === 'email');
   const domain = '@iem.edu.in';
@@ -112,12 +122,13 @@ export const LoginScreen = () => {
       const resData = response.data.data;
       const user = resData.user;
       const token = resData.accessToken;
+      await credentialStore.setRefreshToken(resData.refreshToken);
       
-      dispatch(setCredentials({ user, token }));
+      dispatch(setCredentials({ user, token, nextRequiredStep: resData.onboarding?.nextRequiredStep }));
       
       // If user hasn't completed profile, Redux won't toggle isAuthenticated
       // Manually push them into the remaining onboarding flow
-      if (!user.department || !user.year) {
+      if (resData.onboarding?.nextRequiredStep === 'profile') {
          navigation.navigate("HouseRules", { user, token });
       }
       
@@ -295,7 +306,7 @@ export const LoginScreen = () => {
                 {error ? <Text style={styles.newErrorText}>{error}</Text> : null}
 
                 <View style={styles.forgotPasswordContainer}>
-                  <TouchableOpacity onPress={() => console.log('Forgot Password pressed')}>
+                  <TouchableOpacity onPress={() => navigation.navigate('PasswordRecovery')}>
                     <Text style={styles.forgotPasswordText}>Recover Password</Text>
                   </TouchableOpacity>
                 </View>

@@ -1,16 +1,19 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Share, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useDispatch, useSelector } from 'react-redux';
-import { logout } from '../../store/authSlice';
+import { updateUser } from '../../store/authSlice';
 import { colors } from '../../core/theme/colors';
 import { useNavigation } from '@react-navigation/native';
 import { RootState } from '../../store';
+import { api } from '../../services/api';
+import { clearLocalSession, logoutSession } from '../../services/sessionLogout';
 
 export const SettingsScreen = () => {
   const dispatch = useDispatch();
-  const navigation = useNavigation();
+  const navigation = useNavigation<any>();
   const authUser = useSelector((state: RootState) => state.auth.user);
+  const [accountBusy, setAccountBusy] = useState(false);
 
   const handleLogout = () => {
     Alert.alert(
@@ -21,10 +24,65 @@ export const SettingsScreen = () => {
         {
           text: 'Logout',
           style: 'destructive',
-          onPress: () => dispatch(logout()),
+          onPress: async () => {
+            const result = await logoutSession();
+            if (!result.localCleared || !result.serverRevoked) {
+              Alert.alert('Logout incomplete', 'Local access was closed. Some stored data or server session cleanup failed.');
+            }
+          },
         },
       ]
     );
+  };
+
+  const handleExport = async () => {
+    setAccountBusy(true);
+    try {
+      const created = await api.post('/account/exports');
+      const request = await api.get(`/account/requests/${created.data.data.id}`);
+      await Share.share({
+        title: 'My IEM Dating data',
+        message: JSON.stringify(request.data.data.result, null, 2),
+      });
+    } catch {
+      Alert.alert('Export failed', 'The app could not create your data export. Try again.');
+    } finally { setAccountBusy(false); }
+  };
+
+  const handleDeletion = () => {
+    Alert.alert(
+      'Delete account',
+      'Your profile will leave discovery now. The app will erase your personal data after 30 days. Sign in during this period to cancel the request.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete account',
+          style: 'destructive',
+          onPress: async () => {
+            setAccountBusy(true);
+            try {
+              await api.post('/account/deletion', { confirmation: 'DELETE' });
+              if (!await clearLocalSession()) {
+                Alert.alert('Storage cleanup failed', 'Account deletion was scheduled and local access was closed. Some stored data could not be removed.');
+              }
+            } catch {
+              Alert.alert('Request failed', 'The app could not schedule account deletion. Try again.');
+            } finally { setAccountBusy(false); }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleCancelDeletion = async () => {
+    setAccountBusy(true);
+    try {
+      await api.delete('/account/deletion');
+      dispatch(updateUser({ accountStatus: 'active' }));
+      Alert.alert('Deletion cancelled', 'Your account is active again.');
+    } catch {
+      Alert.alert('Request failed', 'The app could not cancel account deletion.');
+    } finally { setAccountBusy(false); }
   };
 
   return (
@@ -59,6 +117,38 @@ export const SettingsScreen = () => {
                 {authUser?.createdAt ? new Date(authUser.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : ''}
             </Text>
         </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Privacy and security</Text>
+        <TouchableOpacity style={styles.dataButton} onPress={() => navigation.navigate('ActiveSessions')}>
+          <Ionicons name="phone-portrait-outline" size={20} color={colors.text.primary} />
+          <Text style={styles.rowText}>Active sessions</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.dataButton} onPress={() => navigation.navigate('BlockedAccounts')}>
+          <Ionicons name="ban-outline" size={20} color={colors.text.primary} />
+          <Text style={styles.rowText}>Blocked accounts</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Your data</Text>
+        <TouchableOpacity style={styles.dataButton} onPress={handleExport} disabled={accountBusy}>
+          <Ionicons name="download-outline" size={20} color={colors.text.primary} />
+          <Text style={styles.rowText}>Export my data</Text>
+        </TouchableOpacity>
+        {authUser?.accountStatus === 'deletion_pending' ? (
+          <TouchableOpacity style={styles.dataButton} onPress={handleCancelDeletion} disabled={accountBusy}>
+            <Ionicons name="refresh-outline" size={20} color={colors.text.primary} />
+            <Text style={styles.rowText}>Cancel account deletion</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity style={styles.dataButton} onPress={handleDeletion} disabled={accountBusy}>
+            <Ionicons name="trash-outline" size={20} color={colors.error} />
+            <Text style={styles.deleteText}>Delete account</Text>
+          </TouchableOpacity>
+        )}
+        {accountBusy && <ActivityIndicator color={colors.primary} style={{ marginTop: 12 }} />}
       </View>
 
       <View style={styles.section}>
@@ -141,6 +231,18 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(239,68,68,0.2)',
     gap: 8,
     marginTop: 20,
+  },
+  dataButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  deleteText: {
+    fontSize: 16,
+    color: colors.error,
   },
   logoutText: {
     fontSize: 16,

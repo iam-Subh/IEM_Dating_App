@@ -61,7 +61,7 @@ export const SlideAgreeButton = ({ onAgree }: { onAgree: () => void }) => {
     }))
   ).current;
   const particleIndex = useRef(0);
-  const particleInterval = useRef<NodeJS.Timeout | null>(null);
+  const particleInterval = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     Animated.loop(

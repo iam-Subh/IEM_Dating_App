@@ -109,7 +109,11 @@ export const OrientationSelectionScreen = () => {
             </Text>
           </View>
 
-          <ScrollView showsVerticalScrollIndicator={false} style={styles.optionsContainer}>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            style={styles.optionsContainer}
+            contentContainerStyle={styles.optionsContent}
+          >
             {orientationOptions.map((option) => (
               <TouchableOpacity
                 key={option.id}
@@ -180,7 +184,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 20,
     paddingTop: Platform.OS === "ios" ? 60 : 40,
-    paddingBottom: 20,
+    paddingBottom: Platform.OS === "ios" ? 20 : 0,
   },
   topHeader: {
     flexDirection: 'row',
@@ -214,6 +218,9 @@ const styles = StyleSheet.create({
   optionsContainer: {
     flex: 1,
   },
+  optionsContent: {
+    paddingBottom: 190,
+  },
   optionCard: {
     backgroundColor: 'rgba(255,255,255,0.05)',
     borderRadius: 12,
@@ -246,8 +253,13 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   footer: {
-    paddingVertical: 10,
-    marginTop: 20,
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingTop: 10,
+    paddingBottom: Platform.OS === 'ios' ? 0 : 20,
+    backgroundColor: '#0F1115',
   },
   visibilityToggle: {
     flexDirection: 'row',

@@ -46,7 +46,7 @@ interface ProfileData {
   seeking?: string;
   college?: string;
   department?: string;
-  year?: number;
+  graduationYear?: number;
   campus?: string;
   degree?: string;
   isHosteller?: boolean;
@@ -159,7 +159,7 @@ export const ProfileScreen = () => {
     ...profile,
     id: profile.id,
     name: profile.name,
-    year: profile.year ? `${profile.year} Year` : '',
+    graduationYear: profile.graduationYear ?? null,
     department: profile.department || '',
     imageUri: avatarImageUri || '',
     intent: profile.seeking || 'Networking',
@@ -217,7 +217,7 @@ export const ProfileScreen = () => {
           </Text>
           <Text style={styles.dashboardSubtitle}>
             {profile.department ? `${profile.department} ` : ''}
-            {profile.year ? `• ${profile.year} Year` : ''}
+            {profile.graduationYear ? `• Class of ${profile.graduationYear}` : ''}
           </Text>
         </View>
 
@@ -319,8 +319,8 @@ export const ProfileScreen = () => {
           {profile.department && (
             <DetailRow icon="book-outline" label="Department" value={profile.department} />
           )}
-          {profile.year && (
-            <DetailRow icon="calendar-outline" label="Year" value={`${profile.year}`} />
+          {profile.graduationYear && (
+            <DetailRow icon="calendar-outline" label="Graduation year" value={`${profile.graduationYear}`} />
           )}
           {profile.campus && (
             <DetailRow icon="location-outline" label="Campus" value={profile.campus} />

@@ -17,9 +17,9 @@ import Animated, {
   cancelAnimation,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { Audio } from 'expo-av';
-import * as FileSystem from 'expo-file-system';
-import { useAudioRecorder } from '@siteed/expo-audio-studio';
+import { requestRecordingPermissionsAsync } from 'expo-audio';
+import { discardDraftMedia } from '../draftMedia';
+import { useAudioRecorder } from '@siteed/audio-studio';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors } from '../../../core/theme/colors';
@@ -114,7 +114,7 @@ export const VoiceRecordBar = React.forwardRef<TextInput, VoiceRecordBarProps>(
 
   const requestMicPermission = useCallback(async (): Promise<boolean> => {
     try {
-      const { status } = await Audio.requestPermissionsAsync();
+      const { status } = await requestRecordingPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission Required', 'Microphone access is needed to record voice notes.');
         return false;
@@ -179,9 +179,10 @@ export const VoiceRecordBar = React.forwardRef<TextInput, VoiceRecordBarProps>(
     } catch {
       // may already be stopped
     }
-    // Clean up temp file
+    // Clean up the staged recording. FileSystem.deleteAsync is a legacy stub
+    // that throws on the current SDK, so this previously reclaimed nothing.
     if (fileUriRef.current) {
-      FileSystem.deleteAsync(fileUriRef.current, { idempotent: true }).catch(() => {});
+      void discardDraftMedia(fileUriRef.current);
       fileUriRef.current = null;
     }
   }, [stopRecording]);

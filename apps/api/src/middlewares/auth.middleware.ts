@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
-import { verifyAccessToken } from '../utils/jwt';
 import { ApiResponse } from '../utils/ApiResponse';
 import { prisma } from '../utils/prisma';
 import { redisClient } from '../utils/redis';
+import { AccessSessionService } from '../services/access-session.service';
 
 /**
  * Debounced update of user's lastActiveAt.
@@ -27,7 +27,7 @@ async function updateLastActive(userId: string): Promise<void> {
   }
 }
 
-export const protect = (req: Request, res: Response, next: NextFunction) => {
+export const protect = async (req: Request, res: Response, next: NextFunction) => {
   let authHeader = req.headers.authorization;
   
   if (!authHeader) {
@@ -39,15 +39,14 @@ export const protect = (req: Request, res: Response, next: NextFunction) => {
     authHeader = authHeader.split(',')[0].trim();
   }
 
-  const token = authHeader.split(' ')[1];
+  const [scheme, token] = authHeader.split(' ');
 
-  if (!token || token === 'undefined' || token === 'null') {
+  if (scheme !== 'Bearer' || !token || token === 'undefined' || token === 'null') {
     return res.status(401).json(ApiResponse.error('Not authorized, token is invalid'));
   }
 
   try {
-    const decoded = verifyAccessToken(token) as any;
-    console.log('Token verified for user:', decoded.sub);
+    const decoded = await AccessSessionService.authenticate(token);
     (req as any).user = decoded;
 
     // Track activity (async, non-blocking)
@@ -55,7 +54,6 @@ export const protect = (req: Request, res: Response, next: NextFunction) => {
 
     next();
   } catch (error) {
-    console.error('JWT Verification Error:', error);
     return res.status(401).json(ApiResponse.error('Not authorized, token validation failed'));
   }
 };

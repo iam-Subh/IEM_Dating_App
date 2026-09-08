@@ -20,6 +20,7 @@ import { api } from "../../../services/api";
 import { setCredentials } from "../../../store/authSlice";
 import { colors } from "../../../core/theme/colors";
 import { AnimatedBlurBackground } from "../../../components/ui/AnimatedBlurBackground";
+import { credentialStore } from "../../../services/credentialStore";
 
 const OTP_LENGTH = 6;
 const RESEND_COOLDOWN = 60;
@@ -30,6 +31,7 @@ export const SignUpOTPScreen = () => {
   const navigation = useNavigation<any>();
   const dispatch = useDispatch();
   const { email, password, intent } = route.params || {};
+  const [challengeId, setChallengeId] = useState(route.params?.challengeId || "");
 
   const [otp, setOtp] = useState<string[]>(Array(OTP_LENGTH).fill(""));
   const [timer, setTimer] = useState(RESEND_COOLDOWN);
@@ -144,7 +146,7 @@ export const SignUpOTPScreen = () => {
 
     try {
       // Step 1: Verify OTP
-      await api.post("/auth/verify-otp", { email, code });
+      const verification = await api.post("/auth/verify-otp", { email, code, challengeId });
 
       // Step 2: Register user
       await api.post("/auth/register", {
@@ -155,10 +157,12 @@ export const SignUpOTPScreen = () => {
           .replace(/\d{4}$/, "")
           .trim(),
         password,
+        verificationToken: verification.data.data.verificationToken,
       });
 
       // Step 3: Login to get tokens
       const loginRes = await api.post("/auth/login", { email, password });
+      await credentialStore.setRefreshToken(loginRes.data.data.refreshToken);
 
       // Success animation
       setSuccess(true);
@@ -181,13 +185,11 @@ export const SignUpOTPScreen = () => {
         }),
       ]).start();
 
-      console.log('[DEBUG SIGNUP]: OTP Verified - User ID:', loginRes.data.data.user.id);
-      console.log('[DEBUG SIGNUP]: Access Token received:', loginRes.data.data.accessToken ? 'EXISTS (starts with ' + loginRes.data.data.accessToken.substring(0, 10) + ')' : 'MISSING');
-
       dispatch(
         setCredentials({
           user: loginRes.data.data.user,
           token: loginRes.data.data.accessToken,
+          nextRequiredStep: loginRes.data.data.onboarding?.nextRequiredStep,
         })
       );
 
@@ -219,7 +221,8 @@ export const SignUpOTPScreen = () => {
     if (timer > 0 || isResending) return;
     setIsResending(true);
     try {
-      await api.post("/auth/send-otp", { email });
+      const response = await api.post("/auth/send-otp", { email });
+      setChallengeId(response.data.data.challengeId);
       setTimer(RESEND_COOLDOWN);
       setOtp(Array(OTP_LENGTH).fill(""));
       inputRefs.current[0]?.focus();

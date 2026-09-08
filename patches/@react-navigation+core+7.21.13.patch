@@ -1,0 +1,49 @@
+diff --git a/node_modules/@react-navigation/core/lib/module/getPathFromState.js b/node_modules/@react-navigation/core/lib/module/getPathFromState.js
+index b34b8b0..a836409 100644
+--- a/node_modules/@react-navigation/core/lib/module/getPathFromState.js
++++ b/node_modules/@react-navigation/core/lib/module/getPathFromState.js
+@@ -1,6 +1,6 @@
+ "use strict";
+ 
+-import * as queryString from 'query-string';
++import queryString from 'query-string';
+ import { getPatternParts } from "./getPatternParts.js";
+ import { getStateFromRouteParams } from "./getStateFromRouteParams.js";
+ import { validatePathConfig } from "./validatePathConfig.js";
+diff --git a/node_modules/@react-navigation/core/lib/module/getStateFromPath.js b/node_modules/@react-navigation/core/lib/module/getStateFromPath.js
+index 927ab33..0e379eb 100644
+--- a/node_modules/@react-navigation/core/lib/module/getStateFromPath.js
++++ b/node_modules/@react-navigation/core/lib/module/getStateFromPath.js
+@@ -1,7 +1,7 @@
+ "use strict";
+ 
+ import escape from 'escape-string-regexp';
+-import * as queryString from 'query-string';
++import queryString from 'query-string';
+ import { arrayStartsWith } from "./arrayStartsWith.js";
+ import { findFocusedRoute } from "./findFocusedRoute.js";
+ import { getPatternParts } from "./getPatternParts.js";
+diff --git a/node_modules/@react-navigation/core/src/getPathFromState.tsx b/node_modules/@react-navigation/core/src/getPathFromState.tsx
+index 8dc7bfb..37de977 100644
+--- a/node_modules/@react-navigation/core/src/getPathFromState.tsx
++++ b/node_modules/@react-navigation/core/src/getPathFromState.tsx
+@@ -1,5 +1,5 @@
+ import type { NavigationState, PartialState } from '@react-navigation/routers';
+-import * as queryString from 'query-string';
++import queryString from 'query-string';
+ 
+ import { getPatternParts, type PatternPart } from './getPatternParts';
+ import { getStateFromRouteParams } from './getStateFromRouteParams';
+diff --git a/node_modules/@react-navigation/core/src/getStateFromPath.tsx b/node_modules/@react-navigation/core/src/getStateFromPath.tsx
+index ff4e556..bf38dda 100644
+--- a/node_modules/@react-navigation/core/src/getStateFromPath.tsx
++++ b/node_modules/@react-navigation/core/src/getStateFromPath.tsx
+@@ -5,7 +5,7 @@ import type {
+   PartialState,
+ } from '@react-navigation/routers';
+ import escape from 'escape-string-regexp';
+-import * as queryString from 'query-string';
++import queryString from 'query-string';
+ 
+ import { arrayStartsWith } from './arrayStartsWith';
+ import { findFocusedRoute } from './findFocusedRoute';

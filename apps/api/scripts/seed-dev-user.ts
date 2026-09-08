@@ -26,7 +26,7 @@ async function main() {
         name: 'Dev TestUser',
         passwordHash: hashedPassword,
         department: 'BCA',
-        year: 1,
+        yearOfStudy: 1,
         isVerified: true,
       }
     });

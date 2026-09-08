@@ -1,3 +1,6 @@
+import { useIsFocused } from '@react-navigation/native';
+import { DiscoverySettings } from '../components/DiscoverySettings';
+import type { DiscoveryPage, DiscoveryCard } from '@iem-dating/shared';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   View, 
@@ -12,7 +15,8 @@ import {
   PanResponder, 
   Dimensions,
   TouchableOpacity,
-  Image
+  Image,
+  AppState
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SwipeCard } from '../components/SwipeCard';
@@ -26,9 +30,15 @@ const SWIPE_THRESHOLD = 0.2 * SCREEN_WIDTH;
 const SWIPE_VELOCITY_THRESHOLD = 0.7;
 
 export const DiscoverScreen = () => {
-  const [users, setUsers] = useState<any[]>([]);
+  const [users, setUsers] = useState<DiscoveryCard[]>([]);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
+  const nextCursor = useRef<string | null>(null);
+  const fetching = useRef(false), swiping = useRef(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [discoveryState, setDiscoveryState] = useState('loading');
+  const [fetchError, setFetchError] = useState('');
+  const focused = useIsFocused();
+  const [appActive, setAppActive] = useState(AppState.currentState === 'active');
   const [hasMore, setHasMore] = useState(true);
 
   const position = useRef(new Animated.ValueXY()).current;
@@ -50,56 +60,73 @@ export const DiscoverScreen = () => {
   }, [users]);
 
   useEffect(() => {
-    fetchRecommendations(1);
+    const listener = AppState.addEventListener('change', state => setAppActive(state === 'active'));
+    return () => listener.remove();
   }, []);
 
-  const fetchRecommendations = async (pageNum = 1) => {
+  useEffect(() => {
+    if (focused && appActive && !settingsOpen) void fetchRecommendations(true);
+  }, [focused, appActive, settingsOpen]);
+
+  useEffect(() => {
+    const receipt = users[0]?.impressionId;
+    if (!receipt || !focused || !appActive || settingsOpen) return;
+    let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const acknowledge = async (attempt = 0) => {
+      try { await api.post('/discover/visible', { impressionId: receipt }); }
+      catch { if (!cancelled && attempt < 2) retry = setTimeout(() => void acknowledge(attempt + 1), 2000 * (attempt + 1)); }
+    };
+    const timer = setTimeout(() => void acknowledge(), 1000);
+    return () => { cancelled = true; clearTimeout(timer); if (retry) clearTimeout(retry); };
+  }, [users[0]?.impressionId, focused, appActive, settingsOpen]);
+
+  const fetchRecommendations = async (restart = false) => {
+    if (fetching.current || (!restart && !nextCursor.current)) return;
+    fetching.current = true;
+    if (restart) { setLoading(true); nextCursor.current = null; setUsers([]); }
+    setFetchError('');
     try {
-      if (pageNum === 1) setLoading(true);
-      const res = await api.get(`/discover/recommendations?page=${pageNum}&limit=5`);
-      const newUsers = res.data.data;
-      
-      if (newUsers.length === 0) {
-        setHasMore(false);
-      } else {
-        setUsers(prev => pageNum === 1 ? newUsers : [...prev, ...newUsers]);
-      }
-    } catch (error) {
-      console.error("Failed to fetch recommendations:", error);
-    } finally {
-      if (pageNum === 1) setLoading(false);
-    }
+      const query = nextCursor.current ? `&cursor=${encodeURIComponent(nextCursor.current)}` : '';
+      const res = await api.get<{ success: boolean; data: DiscoveryPage }>(`/discover/recommendations?limit=20${query}`);
+      const data = res.data.data;
+      nextCursor.current = data.nextCursor;
+      setHasMore(!!data.nextCursor);
+      setDiscoveryState(data.state);
+      setUsers(prev => {
+        const existing = restart ? [] : prev;
+        const known = new Set(existing.map(u => u.id));
+        return [...existing, ...data.cards.filter((u: any) => !known.has(u.id))];
+      });
+    } catch (error: any) {
+      if (error.response?.data?.code === 'DECK_EXPIRED') {
+        nextCursor.current = null;
+        setFetchError('Your discovery list changed. Select Retry to load it.');
+      } else setFetchError('Could not load profiles. Select Retry.');
+    } finally { fetching.current = false; setLoading(false); }
   };
 
   const handleSwipe = async (action: 'like' | 'pass') => {
-    if (usersRef.current.length === 0) return;
-    
-    const currentUsers = usersRef.current;
-    const targetUser = currentUsers[0];
-    
-    setUsers(prev => prev.slice(1));
-    
-    if (currentUsers.length <= 3 && hasMore && !loading) {
-      const nextPage = page + 1;
-      setPage(nextPage);
-      fetchRecommendations(nextPage);
-    }
-
+    const targetUser = usersRef.current[0];
+    if (!targetUser) { swiping.current = false; return; }
     try {
-      const res = await api.post('/discover/swipe', {
-        targetId: targetUser.id,
-        action
-      });
-
-      if (res.data.data && res.data.data.matchCreated) {
-        Alert.alert("It's a Match! 🎉", `You and ${targetUser.name} liked each other!`);
-      }
-    } catch (error) {
-      console.error(`Failed to record ${action}:`, error);
-    }
+      const res = await api.post('/discover/swipe', { targetId: targetUser.id, action });
+      usersRef.current = usersRef.current.filter(u => u.id !== targetUser.id);
+      setUsers(usersRef.current);
+      if (res.data.data?.matchCreated) Alert.alert("It's a match!", `You and ${targetUser.name} liked each other.`);
+      if (usersRef.current.length <= 3 && nextCursor.current) void fetchRecommendations();
+    } catch (error: any) {
+      if (error.response?.data?.code === 'PROFILE_UNAVAILABLE') {
+        usersRef.current = usersRef.current.filter(u => u.id !== targetUser.id);
+        setUsers(usersRef.current);
+        if (usersRef.current.length <= 3 && nextCursor.current) void fetchRecommendations();
+      } else Alert.alert('Swipe not saved', 'The card is still available. Retry the same action.');
+    } finally { swiping.current = false; }
   };
 
   const forceSwipe = (direction: 'left' | 'right') => {
+    if (swiping.current || !usersRef.current.length || settingsOpen) return;
+    swiping.current = true;
     const x = direction === 'right' ? SCREEN_WIDTH * 1.5 : -SCREEN_WIDTH * 1.5;
     Animated.timing(position, {
       toValue: { x, y: 0 },
@@ -236,8 +263,10 @@ export const DiscoverScreen = () => {
           <View style={styles.emptyIconCircle}>
             <Text style={styles.emptyEmoji}>✨</Text>
           </View>
-          <Text style={styles.emptyTitle}>You're all caught up!</Text>
-          <Text style={styles.emptySub}>Check back later for more profiles nearby.</Text>
+          <Text style={styles.emptyTitle}>{discoveryState === 'setup_required' ? 'Set discovery preferences' : discoveryState === 'capacity_limited' ? 'Discovery is busy' : 'No more profiles'}</Text>
+          <Text style={styles.emptySub}>{fetchError || (discoveryState === 'capacity_limited' ? 'Some profiles are temporarily reserved. Select Load more to retry shortly.' : discoveryState === 'setup_required' ? 'Confirm whom you want to see before discovery starts.' : hasMore ? 'More profiles may be available. Select Load more.' : 'This list has ended. Retry or change your preferences.')}</Text>
+          <TouchableOpacity onPress={() => setSettingsOpen(true)}><Text style={[styles.emptySub, { marginTop: 18, color: '#fff' }]}>Edit preferences</Text></TouchableOpacity>
+          <TouchableOpacity onPress={() => fetchRecommendations(!nextCursor.current)}><Text style={[styles.emptySub, { marginTop: 18, color: '#fff' }]}>{hasMore ? 'Load more' : 'Retry'}</Text></TouchableOpacity>
         </View>
       );
     }
@@ -278,7 +307,10 @@ export const DiscoverScreen = () => {
           <SwipeCard 
             user={{
               ...user,
-              imageUri: user.primaryPhoto,
+              imageUri: user.primaryPhoto ?? '',
+              department: user.department ?? '',
+              intent: user.seeking ?? '',
+              distance: user.distanceLabel ?? undefined,
               tags: typeof user.seeking === 'string' ? [user.seeking] : [],
             }}
             onLike={() => isTopCard && forceSwipe('right')}
@@ -296,6 +328,8 @@ export const DiscoverScreen = () => {
       <StatusBar barStyle="light-content" />
       <SafeAreaView style={styles.safeArea}>
         <IemConnectHeader />
+        <TouchableOpacity onPress={() => setSettingsOpen(true)} style={{ paddingHorizontal: 18, paddingVertical: 6 }}><Text style={{ color: '#fff' }}>Discovery preferences</Text></TouchableOpacity>
+        <DiscoverySettings visible={settingsOpen} onClose={() => setSettingsOpen(false)} onSaved={() => setSettingsOpen(false)} />
         <IemConnectMembersList />
         <View style={styles.cardsWrapper}>
           {renderCards()}

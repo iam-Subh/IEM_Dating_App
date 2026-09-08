@@ -20,6 +20,7 @@ import { api } from '../../../services/api';
 import { setCredentials } from '../../../store/authSlice';
 import { colors } from '../../../core/theme/colors';
 import { AnimatedBlurBackground } from '../../../components/ui/AnimatedBlurBackground';
+import { credentialStore } from '../../../services/credentialStore';
 
 const OTP_LENGTH = 6;
 const RESEND_COOLDOWN = 60;
@@ -30,6 +31,7 @@ export const PhoneOTPScreen = () => {
   const navigation = useNavigation<any>();
   const dispatch = useDispatch();
   const phone = route.params?.phone || '';
+  const [challengeId, setChallengeId] = useState(route.params?.challengeId || '');
 
   const [otp, setOtp] = useState<string[]>(Array(OTP_LENGTH).fill(''));
   const [timer, setTimer] = useState(RESEND_COOLDOWN);
@@ -143,7 +145,8 @@ export const PhoneOTPScreen = () => {
     setVerifying(true);
 
     try {
-      const res = await api.post('/auth/verify-phone-otp', { phone, code });
+      const res = await api.post('/auth/verify-phone-otp', { phone, code, challengeId });
+      await credentialStore.setRefreshToken(res.data.data.refreshToken);
 
       setSuccess(true);
       Animated.parallel([
@@ -164,19 +167,17 @@ export const PhoneOTPScreen = () => {
         const user = res.data.data.user;
         const accessToken = res.data.data.accessToken;
 
-        console.log('[DEBUG OTP]: OTP Verified - User ID:', user.id);
-        console.log('[DEBUG OTP]: Access Token received:', accessToken ? 'EXISTS (starts with ' + accessToken.substring(0, 10) + ')' : 'MISSING');
-
         // Always persist credentials to Redux to authorize onboarding API calls
         dispatch(
           setCredentials({
             user,
             token: accessToken,
+            nextRequiredStep: res.data.data.onboarding?.nextRequiredStep,
           })
         );
 
         // If user hasn't completed profile, show House Rules first
-        if (!user.department || !user.year) {
+        if (res.data.data.onboarding?.nextRequiredStep === 'profile') {
           navigation.navigate("HouseRules", {
             user,
             token: accessToken,
@@ -200,7 +201,8 @@ export const PhoneOTPScreen = () => {
     if (timer > 0 || isResending) return;
     setIsResending(true);
     try {
-      await api.post('/auth/send-phone-otp', { phone });
+      const response = await api.post('/auth/send-phone-otp', { phone });
+      setChallengeId(response.data.data.challengeId);
       setTimer(RESEND_COOLDOWN);
       setOtp(Array(OTP_LENGTH).fill(''));
       inputRefs.current[0]?.focus();

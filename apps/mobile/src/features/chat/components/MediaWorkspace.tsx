@@ -49,7 +49,7 @@ export const MediaWorkspace: React.FC<MediaWorkspaceProps> = ({
   const flatListRef = useRef<FlatList>(null);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const showSub = Keyboard.addListener(
@@ -98,7 +98,7 @@ export const MediaWorkspace: React.FC<MediaWorkspaceProps> = ({
     <Modal visible={visible} animationType="fade" transparent={false}>
       <KeyboardAvoidingView behavior="padding" style={styles.container}>
         {/* Large Image Paging - Absolute Fill */}
-        <View style={StyleSheet.absoluteFillObject}>
+        <View style={StyleSheet.absoluteFill}>
           <FlatList
             ref={flatListRef}
             data={images}

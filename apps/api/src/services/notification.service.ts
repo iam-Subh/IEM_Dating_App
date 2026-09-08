@@ -1,12 +1,12 @@
 import { prisma } from '../utils/prisma';
 import { logger } from '../utils/logger';
+import { PushService } from './push.service';
 
 /**
  * Notification Service — Persists notifications to database and
  * provides methods for reading/managing them.
  *
- * Push notification integration (Firebase/Expo) can be added later
- * by extending the create methods.
+ * Expo push delivery uses the device tokens registered by the mobile app.
  */
 export class NotificationService {
 
@@ -29,7 +29,12 @@ export class NotificationService {
           actionUrl: `/match/${matchId}`,
         },
       });
-      logger.info(`[NOTIFICATION] Match → ${userId.slice(0, 8)}: Matched with ${otherUserName}`);
+      await PushService.send(userId, {
+        title: "It's a match!",
+        body: `You and ${otherUserName} liked each other!`,
+        data: { url: `iemdating://match/${matchId}`, matchId },
+      });
+      logger.info('[NOTIFICATION] Match notification queued');
     } catch (error) {
       logger.error('[NOTIFICATION] Error sending match notification:', error);
     }
@@ -60,23 +65,11 @@ export class NotificationService {
         },
       });
 
-      // TRIGGER PUSH NOTIFICATIONS
-      const tokens = await prisma.deviceToken.findMany({ where: { userId } });
-      if (tokens.length > 0) {
-        // FCM / Expo Push Payload configured strictly to open specific chat via deep linking
-        const pushPayload = {
-           to: tokens.map(t => t.token),
-           sound: 'default',
-           title: senderName,
-           body: preview,
-           data: { 
-             url: `iemdatingapp://chat/${matchId}`, // Deep link for the mobile app router
-             matchId 
-           }
-        };
-        // TODO: Call your actual Push API (e.g. Expo SDK, Firebase Admin) using pushPayload 
-        logger.info(`[PUSH] Dispatched message notification to ${tokens.length} devices for user ${userId.slice(0, 8)}`);
-      }
+      await PushService.send(userId, {
+        title: senderName,
+        body: preview,
+        data: { url: `iemdating://chat/${matchId}`, matchId },
+      });
 
     } catch (error) {
       logger.error('[NOTIFICATION] Error sending message notification:', error);
@@ -100,6 +93,11 @@ export class NotificationService {
           data: { fromUserName },
         },
       });
+      await PushService.send(userId, {
+        title: 'Someone likes you!',
+        body: `${fromUserName} liked your profile`,
+        data: { url: 'iemdating://main' },
+      });
     } catch (error) {
       logger.error('[NOTIFICATION] Error sending like notification:', error);
     }
@@ -122,6 +120,7 @@ export class NotificationService {
           body,
         },
       });
+      await PushService.send(userId, { title, body, data: { url: 'iemdating://main' } });
     } catch (error) {
       logger.error('[NOTIFICATION] Error sending system notification:', error);
     }

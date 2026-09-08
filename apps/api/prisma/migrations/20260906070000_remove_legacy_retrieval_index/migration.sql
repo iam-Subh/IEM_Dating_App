@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY users_is_active_gender_seeking_last_active_at_idx;

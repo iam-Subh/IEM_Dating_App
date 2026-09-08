@@ -95,7 +95,6 @@ const VideoPreview = ({ uri }: VideoPreviewProps) => {
       <VideoView 
         style={styles.heroMedia} 
         player={player} 
-        allowsFullscreen={false} 
         nativeControls={false}
         contentFit="cover"
       />
@@ -617,13 +616,14 @@ export const PhotoUploadScreen = () => {
            method: 'PUT',
            body: blob,
            headers: {
-             'Content-Type': file.type === 'video' ? `video/${file.ext}` : `image/${file.ext}`
+             'Content-Type': ticket.contentType
            }
          });
 
          if (!s3Res.ok) {
            throw new Error(`S3 Upload failed for ${file.type} with status ${s3Res.status}`);
          }
+         await api.post(`/upload/${ticket.assetId}/complete`);
 
          return { type: file.type, url: ticket.fileUrl, id: file.id };
       }));
@@ -650,14 +650,6 @@ export const PhotoUploadScreen = () => {
       if (profileUpdateRes.data?.success) {
         dispatch(updateUser(profileUpdateRes.data.data));
         
-        // 6. Trigger async video preview generation (fire-and-forget)
-        if (uploadedVideo) {
-          console.log('Triggering video preview generation...');
-          api.post('/upload/generate-preview', { videoUrl: uploadedVideo }).catch(err => {
-            console.log('Preview generation trigger failed (non-critical):', err);
-          });
-        }
-
         console.log('Onboarding process successfully finalized.');
         dispatch(completeOnboarding());
       } else {

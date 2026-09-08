@@ -1,6 +1,7 @@
+import { compatibilityLabel } from '../../compatibility';
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { View, StyleSheet, Dimensions, ActivityIndicator, Text, TouchableOpacity, ScrollView, Image, Animated, Pressable } from 'react-native';
-import { Video, ResizeMode } from 'expo-av';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { colors } from '../../../../core/theme/colors';
@@ -13,13 +14,53 @@ interface ProfileMediaGalleryProps {
   isVisible: boolean; // Indicates if the modal is currently open
 }
 
+const GalleryVideo: React.FC<{
+  uri: string;
+  active: boolean;
+  muted: boolean;
+  style: any;
+  onReady: () => void;
+  onError: () => void;
+}> = ({ uri, active, muted, style, onReady, onError }) => {
+  const player = useVideoPlayer({ uri }, (videoPlayer) => {
+    videoPlayer.loop = true;
+    videoPlayer.muted = muted;
+  });
+
+  useEffect(() => {
+    player.muted = muted;
+    if (active) {
+      player.play();
+    } else {
+      player.pause();
+      player.currentTime = 0;
+    }
+  }, [active, muted, player]);
+
+  useEffect(() => {
+    const subscription = player.addListener('statusChange', ({ status }) => {
+      if (status === 'error') onError();
+    });
+    return () => subscription.remove();
+  }, [onError, player]);
+
+  return (
+    <VideoView
+      player={player}
+      style={style}
+      contentFit="cover"
+      nativeControls={false}
+      onFirstFrameRender={onReady}
+    />
+  );
+};
+
 export const ProfileMediaGallery: React.FC<ProfileMediaGalleryProps> = ({ user, isVisible }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isMuted, setIsMuted] = useState(true);
   const [mediaReady, setMediaReady] = useState<Record<number, boolean>>({});
   const [mediaError, setMediaError] = useState<Record<number, boolean>>({});
   const scrollX = useRef(new Animated.Value(0)).current;
-  const videoRef = useRef<any>(null);
   const scrollViewRef = useRef<ScrollView>(null);
 
   const mediaItems = useMemo(() => {
@@ -35,13 +76,6 @@ export const ProfileMediaGallery: React.FC<ProfileMediaGalleryProps> = ({ user, 
     }
     return items;
   }, [user]);
-
-  // Handle memory and playback
-  useEffect(() => {
-    if (!isVisible && videoRef.current) {
-      videoRef.current.pauseAsync();
-    }
-  }, [isVisible]);
 
   const goToIndex = useCallback((index: number) => {
     if (index < 0 || index >= mediaItems.length) return;
@@ -118,15 +152,12 @@ export const ProfileMediaGallery: React.FC<ProfileMediaGalleryProps> = ({ user, 
                   <Ionicons name="image-outline" size={60} color="rgba(255,255,255,0.4)" />
                 </View>
               ) : item.type === 'video' ? (
-                <Video
-                  ref={videoRef}
-                  source={{ uri: item.uri }}
+                <GalleryVideo
+                  uri={item.uri}
                   style={[StyleSheet.absoluteFill, { opacity: mediaReady[idx] ? 1 : 0 }]}
-                  resizeMode={ResizeMode.COVER}
-                  shouldPlay={isVisible && isActive}
-                  isLooping
-                  isMuted={isMuted}
-                  onReadyForDisplay={() => setMediaReady(prev => ({...prev, [idx]: true}))}
+                  active={isVisible && isActive}
+                  muted={isMuted}
+                  onReady={() => setMediaReady(prev => ({...prev, [idx]: true}))}
                   onError={() => setMediaError(prev => ({...prev, [idx]: true}))}
                 />
               ) : (
@@ -221,9 +252,9 @@ export const ProfileMediaGallery: React.FC<ProfileMediaGalleryProps> = ({ user, 
           {/* Name, Age, Verified Badge */}
           <View style={styles.nameContainer}>
             <Text style={styles.nameText}>
-              {user.name?.split(' ')[0]}, {user.age || user.year?.replace(' Year', '') || ''}
+              {user.name?.split(' ')[0]}{user.age ? `, ${user.age}` : ''}
             </Text>
-            {(user as any).isVerified || (user as any).phone ? (
+            {(user as any).isVerified ? (
               <View style={styles.verifiedBadgeContainer}>
                 <View style={styles.verifiedBadgeBackground} />
                 <MaterialIcons name="verified" size={24} color="#3b82f6" />
@@ -233,7 +264,7 @@ export const ProfileMediaGallery: React.FC<ProfileMediaGalleryProps> = ({ user, 
 
           {/* Match Percentage Badge */}
           <View style={styles.matchBadge}>
-            <Text style={styles.matchText}>Match {user.matchPercentage || 98}%</Text>
+            <Text style={styles.matchText}>{compatibilityLabel(user.matchPercentage)}</Text>
           </View>
         </View>
 
@@ -404,7 +435,7 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   tapZoneContainer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     flexDirection: 'row',
     zIndex: 5,
   },

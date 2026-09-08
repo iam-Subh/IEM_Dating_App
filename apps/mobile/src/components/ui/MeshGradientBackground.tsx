@@ -14,13 +14,13 @@ export const MeshGradientBackground = ({ children, style }: Props) => {
   return (
     <View style={[styles.container, style]}>
       {/* Base Dark Background */}
-      <View style={[StyleSheet.absoluteFillObject, { backgroundColor: colors.background }]} />
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.background }]} />
       
       {/* Top Left Subtle Purple Gradient */}
       <View style={styles.topLeftGradient}>
         <LinearGradient
           colors={['rgba(88, 28, 135, 0.25)', 'rgba(88, 28, 135, 0)']}
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
         />
@@ -32,7 +32,7 @@ export const MeshGradientBackground = ({ children, style }: Props) => {
           colors={['rgba(30, 58, 138, 0.25)', 'transparent']}
           start={{ x: 1, y: 1 }}
           end={{ x: 0, y: 0 }}
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
         />
       </View>
 

@@ -11,7 +11,8 @@ import {
 } from "react-native";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
+import { RootState } from "../../../store";
 import { colors } from "../../../core/theme/colors";
 
 const { width } = Dimensions.get("window");
@@ -27,7 +28,10 @@ export const HouseRulesScreen = () => {
   const dispatch = useDispatch();
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
-  const { user, token, intent } = route.params || {};
+  const auth = useSelector((state: RootState) => state.auth);
+  const { intent } = route.params || {};
+  const user = route.params?.user || auth.user;
+  const token = route.params?.token || auth.token;
 
   const handleAgree = () => {
     navigation.navigate("NameSelection", { user, token, intent });

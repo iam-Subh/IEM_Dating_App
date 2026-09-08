@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import {
+  Alert,
   View,
   Text,
   StyleSheet,
@@ -25,6 +26,7 @@ import AnimatedReanimated, { useSharedValue, useAnimatedStyle, withTiming, runOn
 import { useKeyboardHandler } from 'react-native-keyboard-controller';
 import { RootState } from '../../../store';
 import { api } from '../../../services/api';
+import { getDeviceId } from '../../../services/deviceIdentity';
 import { getSocket, initSocket } from '../../../services/socket';
 import { addToOfflineQueue, getOfflineQueue, setupQueueRetry, retryOfflineMessages, removeFromQueue, triggerQueueRetry } from '../../../services/offlineQueue';
 import {
@@ -36,19 +38,24 @@ import {
   setLoadingMessages,
   replaceOptimisticMessage,
   removeMessage,
+  applyMessageEdit,
+  applyReaction,
+  markMessagesReadByPeer,
   Message,
 } from '../../../store/chatSlice';
 import { colors } from '../../../core/theme/colors';
 import { useNavigation, useRoute } from '@react-navigation/native';
+
 
 const { width } = Dimensions.get('window');
 const DEFAULT_AVATAR = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop';
 
 interface RouteParams {
   matchId: string;
-  userName: string;
-  userAvatar: string | null;
-  userId: string;
+  userName?: string;
+  userAvatar?: string | null;
+  userId?: string;
+  focusMessageId?: string;
 }
 
 function formatMessageTime(dateStr: string): string {
@@ -123,6 +130,8 @@ const TypingIndicator = () => {
 import { MessageBubble } from '../components/MessageBubble';
 import { CropModal } from '../components/CropModal';
 import { MediaWorkspace } from '../components/MediaWorkspace';
+import { createTypingPresence } from '../typingPresence';
+import { discardDraftMedia, discardDraftMediaBatch } from '../draftMedia';
 
 interface SelectedMedia {
   originalUri: string;
@@ -133,10 +142,15 @@ interface SelectedMedia {
 export const ChatScreen = () => {
   const navigation = useNavigation<any>();
   const route = useRoute();
-  const { matchId, userName, userAvatar, userId } = route.params as RouteParams;
+  const params = route.params as RouteParams;
+  const matchId = params.matchId;
   const dispatch = useDispatch();
 
   const currentUserId = useSelector((state: RootState) => state.auth.user?.id);
+  const conversation = useSelector((state: RootState) => state.chat.conversations.find((item) => item.matchId === matchId));
+  const userName = params.userName ?? conversation?.user.name ?? 'Chat';
+  const userAvatar = params.userAvatar ?? conversation?.user.avatar ?? null;
+  const userId = params.userId ?? conversation?.user.id ?? '';
   const messages = useSelector(
     (state: RootState) => state.chat.activeMessages[matchId] ?? [],
     (a, b) => {
@@ -152,6 +166,7 @@ export const ChatScreen = () => {
   const typingSenderId = useSelector((state: RootState) => state.chat.typingUsers[matchId] ?? null);
 
   const [text, setText] = useState('');
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [selectedImages, setSelectedImages] = useState<SelectedMedia[]>([]);
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
   const [cropModalVisible, setCropModalVisible] = useState(false);
@@ -174,6 +189,7 @@ export const ChatScreen = () => {
   const messageSequenceRef = useRef<number>(0); // Track message order like WhatsApp
   const pendingServerAcksRef = useRef<Map<string, any>>(new Map()); // Buffer for out-of-order arrivals
   const processedServerIdsRef = useRef<Set<string>>(new Set()); // Server IDs already handled by callbacks — skip in new_message
+  const lastEventSeqRef = useRef(0);
   const messageIdsRef = useRef<Set<string>>(new Set()); // Fresh dedup set, updated on every messages change
   const queueRetryInProgressRef = useRef(false); // Prevent double retry (mount + connect event)
   const isScrolledUpRef = useRef(false);
@@ -296,12 +312,13 @@ export const ChatScreen = () => {
       const cachedMessages = messages.filter(m => !m.id.startsWith('temp-'));
       if (cachedMessages.length === 0) return fetchMessages(); // No cache, full fetch
 
-      // For inverted list: index 0 is newest, last index is oldest
-      const oldestMsg = cachedMessages[cachedMessages.length - 1];
-      const response = await api.get(`/chat/${matchId}/messages`, {
-        params: { since: oldestMsg.sentAt },
-      });
-      if (response.data?.success) {
+      // For the inverted list, index 0 is the newest confirmed message.
+      let syncCursor = { sentAt: cachedMessages[0].sentAt, id: cachedMessages[0].id };
+      for (let page = 0; page < 10; page += 1) {
+        const response = await api.get(`/chat/${matchId}/messages`, {
+          params: { since: syncCursor.sentAt, sinceId: syncCursor.id },
+        });
+        if (!response.data?.success) break;
         const newMsgs: Message[] = response.data.data.messages;
         // Messages come ASC from API (oldest first) when using 'since' param
         // This is CORRECT for adding to inverted list - they'll be prepended in right order
@@ -311,6 +328,8 @@ export const ChatScreen = () => {
             dispatch(addMessage(msg));
           }
         }
+        if (!response.data.data.hasMore) break;
+        syncCursor = response.data.data.syncCursor;
       }
     } catch (err) {
       console.error('[Chat] Error fetching new messages:', err);
@@ -320,15 +339,17 @@ export const ChatScreen = () => {
   useEffect(() => {
     // If we have ANY cached messages (including temp/optimistic), sync delta only.
     // NEVER call fetchMessages() when temp messages exist — it would wipe them.
-    if (messages.length > 0) {
+    if (params.focusMessageId) {
+      api.get(`/chat/${matchId}/messages/${params.focusMessageId}/context`).then((response) => {
+        dispatch(setMessages({ matchId, messages: [...response.data.data].reverse() }));
+        setHasMore(false);
+        setNextCursor(null);
+      }).catch(() => fetchMessages());
+    } else if (messages.length > 0) {
       fetchNewMessages();
     } else {
       fetchMessages();
     }
-    // Mark as read when entering
-    api.patch(`/chat/${matchId}/read`).catch(() => {});
-    dispatch(markConversationRead(matchId));
-    
     // Cleanup on unmount: clear typing indicator
     return () => {
       const socket = getSocket();
@@ -340,19 +361,37 @@ export const ChatScreen = () => {
         clearTimeout(typingTimeoutRef.current);
       }
     };
-  }, [matchId]);
+  }, [matchId, params.focusMessageId]);
+
+  useEffect(() => {
+    if (!params.focusMessageId) return;
+    const itemIndex = messages.findIndex((message) => message.id === params.focusMessageId);
+    if (itemIndex >= 0) setTimeout(() => flatListRef.current?.scrollToIndex({ index: itemIndex, animated: false }), 50);
+  }, [messages, params.focusMessageId]);
+
+  const acknowledgeVisible = useCallback((ids: string[]) => {
+    const unreadIds = ids.filter((id) => messages.some((message) => message.id === id && message.senderId !== currentUserId && !message.readAt));
+    if (!unreadIds.length) return;
+    const socket = getSocket();
+    if (socket?.connected) socket.emit('message_read', { matchId, messageIds: unreadIds });
+    else api.patch(`/chat/${matchId}/read`, { messageIds: unreadIds }).catch(() => undefined);
+    dispatch(markConversationRead(matchId));
+  }, [matchId, messages, currentUserId, dispatch]);
 
   // Socket.IO setup
   useEffect(() => {
     initSocket();
     const socket = getSocket();
     if (!socket) return;
+    let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    setConnectionStatus(socket.connected ? 'connected' : 'disconnected');
 
     // Queue Retry Trigger Setup
-    setupQueueRetry(socket);
     
     // Shared retry function — registers optimistic IDs, then retries with per-message callback
     const performQueueRetry = async () => {
+      if (!active) return;
       if (queueRetryInProgressRef.current) {
         console.log('[Chat] Queue retry already in progress, skipping');
         return;
@@ -362,6 +401,7 @@ export const ChatScreen = () => {
       try {
         // Register queued messages into optimisticIdsRef BEFORE retry
         const queue = await getOfflineQueue();
+        if (!active) return;
         const matchQueue = queue.filter(m => m.matchId === matchId);
         for (const item of matchQueue) {
           if (!optimisticIdsRef.current.has(item.tempId)) {
@@ -377,14 +417,16 @@ export const ChatScreen = () => {
         // Per-message callback: fires IMMEDIATELY when server confirms each message
         // This beats the new_message broadcast, preventing duplicates and content swaps
         await triggerQueueRetry(socket, matchId, (queuedMsg, serverMessage) => {
+          if (!active) return;
           console.log(`[Chat] Queue callback: ${queuedMsg.tempId} -> ${serverMessage.id}`);
           // Mark server ID as processed BEFORE broadcast arrives
           processedServerIdsRef.current.add(serverMessage.id);
           // Remove from optimistic tracking
           optimisticIdsRef.current.delete(queuedMsg.tempId);
-          // DON'T dispatch replaceOptimisticMessage — message stays as-is in UI
-          // Server data will sync on next chat open via fetchMessages
+          dispatch(replaceOptimisticMessage({ tempId: queuedMsg.tempId, realMessage: serverMessage }));
         });
+        const failed = (await getOfflineQueue()).filter((message) => message.matchId === matchId && message.status === 'failed');
+        if (active && failed.length) Alert.alert('Messages not sent', `${failed.length} message(s) could not be sent. Their drafts remain stored on this device. Later messages can still be sent.`);
       } catch (err) {
         console.error('[Chat] Queue retry failed:', err);
       } finally {
@@ -399,27 +441,75 @@ export const ChatScreen = () => {
     // Join this match room
     socket.emit('join_match_room', matchId);
 
+    const applyChatEvent = (event: any) => {
+      if (event.matchId !== matchId || event.eventSeq <= lastEventSeqRef.current) return;
+      lastEventSeqRef.current = event.eventSeq;
+      const payload = event.payload || {};
+      if (event.type === 'message.created' && payload.message) {
+        const message = payload.message as Message;
+        if (message.senderId === currentUserId && message.clientMessageId && optimisticIdsRef.current.has(message.clientMessageId)) {
+          dispatch(replaceOptimisticMessage({ tempId: message.clientMessageId, realMessage: message }));
+          optimisticIdsRef.current.delete(message.clientMessageId);
+        } else dispatch(addMessage(message));
+      }
+      if (event.type === 'message.edited') dispatch(applyMessageEdit({ matchId, ...payload }));
+      if (event.type === 'message.deleted' || event.type === 'message.hidden') dispatch(removeMessage({ matchId, messageId: payload.messageId }));
+      if (event.type === 'reaction.set' || event.type === 'reaction.removed') dispatch(applyReaction({ matchId, messageId: payload.messageId, userId: payload.userId, emoji: payload.emoji }));
+      if (event.type === 'messages.read' && payload.userId !== currentUserId) dispatch(markMessagesReadByPeer({ matchId, messageIds: payload.messageIds, throughMessageSeq: payload.throughMessageSeq, readAt: payload.readAt }));
+    };
+
+    let syncing = false;
+    let syncRequested = false;
+    const syncEvents = async (_apply: boolean) => {
+      if (!active) return;
+      if (syncing) { syncRequested = true; return; }
+      syncing = true;
+      try {
+      do {
+      syncRequested = false;
+      let afterSeq = lastEventSeqRef.current;
+      while (active) {
+        const response = await api.get(`/chat/${matchId}/events`, { params: { afterSeq, limit: 200 } });
+        const result = response.data.data;
+        if (!active) return;
+        if (result.resetRequired) {
+          await fetchMessages();
+          lastEventSeqRef.current = result.highWaterSeq;
+          break;
+        }
+        result.events.forEach(applyChatEvent);
+        if (result.hasMore && result.nextSeq <= afterSeq) throw new Error('Chat replay cursor did not advance');
+        afterSeq = result.nextSeq;
+        lastEventSeqRef.current = Math.max(lastEventSeqRef.current, afterSeq);
+        if (!result.hasMore) break;
+      }
+      } while (syncRequested && active);
+      if (!active) return;
+      const deviceId = await getDeviceId();
+      await api.put(`/chat/${matchId}/device-cursor`, { deviceId, eventSeq: lastEventSeqRef.current });
+      } finally { syncing = false; }
+    };
+    const handleChatEvent = (event: any) => {
+      if (event.matchId === matchId) void syncEvents(true).catch(() => undefined);
+    };
+    syncEvents(false).catch(() => undefined);
+
     // Listen for new messages
     const handleNewMessage = (msg: Message) => {
+      if (!active || msg.matchId !== matchId) return;
       console.log('[Chat] new_message:', msg.id, 'from:', msg.senderId === currentUserId ? 'me' : 'other');
       
-      // WHATSAPP-STYLE: Completely skip our own messages from broadcast.
-      // Own messages are already in the UI as optimistic bubbles.
-      // The send callback handles confirmation. The broadcast is redundant.
       if (msg.senderId === currentUserId) {
-        processedServerIdsRef.current.add(msg.id);
-        // Cleanup: remove from optimisticIdsRef if content matches
-        if (optimisticIdsRef.current.size > 0) {
-          const sortedEntries = Array.from(optimisticIdsRef.current.entries())
-            .sort((a, b) => a[1].sequenceNum - b[1].sequenceNum);
-          for (const [key, value] of sortedEntries) {
-            if (value.content === msg.content) {
-              optimisticIdsRef.current.delete(key);
-              break;
-            }
-          }
+        if (processedServerIdsRef.current.has(msg.id) || messageIdsRef.current.has(msg.id)) return;
+        if (msg.clientMessageId && optimisticIdsRef.current.has(msg.clientMessageId)) {
+          optimisticIdsRef.current.delete(msg.clientMessageId);
+          processedServerIdsRef.current.add(msg.id);
+          dispatch(replaceOptimisticMessage({ tempId: msg.clientMessageId, realMessage: msg }));
+          return;
         }
-        return; // NEVER add/replace own messages from broadcast
+        if (processedServerIdsRef.current.has(msg.id)) return;
+        dispatch(addMessage(msg));
+        return;
       }
       
       // --- Only OTHER users' messages reach here ---
@@ -436,26 +526,34 @@ export const ChatScreen = () => {
         setUnreadCount(prev => prev + 1);
       }
 
-      // Auto-mark as read
-      api.patch(`/chat/${matchId}/read`).catch(() => {});
-      socket.emit('message_read', { matchId });
+      if (!isScrolledUpRef.current) {
+        if (socket.connected) socket.emit('message_read', { matchId, messageIds: [msg.id] });
+        else api.patch(`/chat/${matchId}/read`, { messageIds: [msg.id] }).catch(() => {});
+      }
     };
 
     // Listen for read receipts — DON'T re-fetch (would risk wiping temp messages)
-    const handleMessagesRead = (_data: { matchId: string; readBy: string }) => {
-      // Read receipts are status updates, not new data.
-      // The UI will reflect read status on next natural message fetch.
+    const handleMessagesRead = (data: { matchId: string; readBy: string; readAt?: string }) => {
+      if (data.matchId === matchId && data.readBy !== currentUserId) {
+        dispatch(markMessagesReadByPeer({ matchId, readAt: data.readAt ?? new Date().toISOString() }));
+      }
     };
 
-    // Typing indicators
+    // Typing indicators. typing_stop is not guaranteed to arrive, so the
+    // indicator expires on its own. See features/chat/typingPresence.
+    let typingSenderId: string | null = null;
+    const typingPresence = createTypingPresence((typing) => {
+      dispatch(setTyping({ matchId, senderId: typing ? typingSenderId : null }));
+    });
     const handleTypingStart = (data: { senderId: string; matchId: string }) => {
       if (data.matchId === matchId && data.senderId !== currentUserId) {
-        dispatch(setTyping({ matchId, senderId: data.senderId }));
+        typingSenderId = data.senderId;
+        typingPresence.start();
       }
     };
     const handleTypingStop = (data: { senderId: string; matchId: string }) => {
       if (data.matchId === matchId && data.senderId !== currentUserId) {
-        dispatch(setTyping({ matchId, senderId: null }));
+        typingPresence.stop();
       }
     };
 
@@ -469,8 +567,28 @@ export const ChatScreen = () => {
     // Connection status monitoring with retry logic
     const handleConnect = async () => {
       setConnectionStatus('connected');
+      // Wait for the acknowledged join before catching up. Emitting and then
+      // syncing immediately could miss events broadcast to the room while the
+      // join was still in flight.
+      const joined = await new Promise<boolean>((resolve) => {
+        let settled = false;
+        const done = (success = false) => {
+          if (settled) return;
+          settled = true;
+          resolve(success);
+        };
+        const timer = setTimeout(done, 3000);
+        socket.emit('join_match_room', matchId, (response: { success?: boolean }) => {
+          clearTimeout(timer);
+          done(response?.success === true);
+        });
+      });
+      if (!active) return;
+      if (!joined) { setConnectionStatus('disconnected'); return; }
+      syncEvents(true).catch(() => undefined);
       // Trigger offline queue retry when connection is restored
-      setTimeout(() => performQueueRetry(), 1000); // Wait 1 second for stable connection
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => performQueueRetry(), 1000);
     };
     const handleDisconnect = () => setConnectionStatus('disconnected');
     const handleReconnectAttempt = () => setConnectionStatus('reconnecting');
@@ -480,29 +598,35 @@ export const ChatScreen = () => {
     socket.on('typing_start', handleTypingStart);
     socket.on('typing_stop', handleTypingStop);
     socket.on('message_deleted', handleMessageDeleted);
+    socket.on('chat_event', handleChatEvent);
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
-    socket.on('reconnect_attempt', handleReconnectAttempt);
+    socket.io.on('reconnect_attempt', handleReconnectAttempt);
 
     return () => {
+      active = false;
+      clearTimeout(retryTimer);
       socket.off('new_message', handleNewMessage);
       socket.off('messages_read', handleMessagesRead);
       socket.off('typing_start', handleTypingStart);
       socket.off('typing_stop', handleTypingStop);
+      typingPresence.dispose();
       socket.off('message_deleted', handleMessageDeleted);
+      socket.off('chat_event', handleChatEvent);
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
-      socket.off('reconnect_attempt', handleReconnectAttempt);
+      socket.io.off('reconnect_attempt', handleReconnectAttempt);
       dispatch(setTyping({ matchId, senderId: null }));
     };
-  }, [matchId, currentUserId, dispatch]);
+  }, [matchId, currentUserId, dispatch, fetchMessages]);
 
   // Send message — optimistic UI: show instantly, confirm with server
   const handleSend = useCallback(async () => {
     if ((!text.trim() && selectedImages.length === 0) || isSending) return;
     
     const captionsCount = selectedImages.filter(img => img.caption && img.caption.trim()).length;
-    const shouldSplit = captionsCount > 1;
+    const shouldSplit = captionsCount > 1 && !replyingTo;
+    const replyToId = replyingTo?.id;
 
     setIsSending(true);
 
@@ -520,15 +644,17 @@ export const ChatScreen = () => {
           const ext = img.currentUri.split('.').pop() || 'jpeg';
           const urlResponse = await api.get(`/chat/${matchId}/media/upload-url?ext=${ext}`);
           if (urlResponse.data?.success) {
-            const { uploadUrl, mediaKey } = urlResponse.data.data;
+            const { uploadUrl, mediaKey, assetId, contentType } = urlResponse.data.data;
             const imgResponse = await fetch(img.currentUri);
             const blob = await imgResponse.blob();
-            await fetch(uploadUrl, {
+            const uploadResponse = await fetch(uploadUrl, {
               method: 'PUT',
               body: blob,
-              headers: { 'Content-Type': `image/${ext}` },
+              headers: { 'Content-Type': contentType },
             });
-            return { mediaKey, caption: img.caption || '', localUri: img.currentUri };
+            if (!uploadResponse.ok) throw new Error('Failed to upload image');
+            const completed = await api.post(`/chat/${matchId}/media/${assetId}/complete`, undefined, { timeout: 120000 });
+            return { mediaKey: completed.data.data.mediaKey, caption: img.caption || '', localUri: img.currentUri };
           }
           throw new Error('Failed to upload image');
         });
@@ -538,6 +664,7 @@ export const ChatScreen = () => {
         // 2. Clear inputs
         setText('');
         setSelectedImages([]);
+        setReplyingTo(null);
 
         // 3. Create optimistic messages with UNIQUE IDs and SEQUENCE NUMBERS (WhatsApp-style)
         const baseTime = Date.now();
@@ -616,6 +743,7 @@ export const ChatScreen = () => {
                     matchId, 
                     content: m.item.caption, 
                     mediaKeys: [m.item.mediaKey] 
+                    , clientMessageId: m.tempId
                   }, (response: any) => {
                     clearTimeout(socketTimeout);
                     if (response?.success && response.message) {
@@ -657,7 +785,8 @@ export const ChatScreen = () => {
                   try {
                     const response = await api.post(`/chat/${matchId}/messages`, { 
                       content: m.item.caption, 
-                      mediaKeys: [m.item.mediaKey] 
+                      mediaKeys: [m.item.mediaKey],
+                      clientMessageId: m.tempId,
                     });
                     if (response.data?.success && optimisticIdsRef.current.has(m.tempId)) {
                       optimisticIdsRef.current.delete(m.tempId);
@@ -696,6 +825,7 @@ export const ChatScreen = () => {
         
         setText('');
         setSelectedImages([]);
+        setReplyingTo(null);
 
         // Unique ID generation
         const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -708,6 +838,7 @@ export const ChatScreen = () => {
           sentAt,
           readAt: null,
           matchId,
+          replyToId,
         };
 
         dispatch(addMessage(optimisticMsg));
@@ -726,15 +857,17 @@ export const ChatScreen = () => {
             const ext = imageUri.split('.').pop() || 'jpeg';
             const urlResponse = await api.get(`/chat/${matchId}/media/upload-url?ext=${ext}`);
             if (urlResponse.data?.success) {
-              const { uploadUrl, mediaKey } = urlResponse.data.data;
+              const { uploadUrl, mediaKey, assetId, contentType } = urlResponse.data.data;
               const imgResponse = await fetch(imageUri);
               const blob = await imgResponse.blob();
-              await fetch(uploadUrl, {
+              const uploadResponse = await fetch(uploadUrl, {
                 method: 'PUT',
                 body: blob,
-                headers: { 'Content-Type': `image/${ext}` },
+                headers: { 'Content-Type': contentType },
               });
-              return mediaKey;
+              if (!uploadResponse.ok) throw new Error('Upload failed');
+              const completed = await api.post(`/chat/${matchId}/media/${assetId}/complete`, undefined, { timeout: 120000 });
+              return completed.data.data.mediaKey;
             }
             throw new Error('Upload failed');
           });
@@ -762,6 +895,7 @@ export const ChatScreen = () => {
                 queuedAt: Date.now(),
                 status: 'pending',
                 sequenceNum: seqNum, // Use SAME sequence number (don't double-increment!)
+                replyToId,
               });
               console.log(`[Chat] Message ${tempId} queued (offline) with sequence ${messageSequenceRef.current}`);
             }
@@ -776,6 +910,7 @@ export const ChatScreen = () => {
                 queuedAt: Date.now(),
                 status: 'sending',
                 sequenceNum: seqNum, // Use SAME sequence number
+                replyToId,
               }).catch(err => console.error('[Chat] Failed to queue:', err));
 
               const socketTimeout = setTimeout(() => {
@@ -785,7 +920,7 @@ export const ChatScreen = () => {
 
               // Only try socket if connected
               if (isConnected) {
-                socket.emit('send_message', { matchId, content, mediaKeys: finalMediaKeys }, (response: any) => {
+                socket.emit('send_message', { matchId, content, mediaKeys: finalMediaKeys, clientMessageId: tempId, replyToId }, (response: any) => {
                   clearTimeout(socketTimeout);
                   if (response?.success && response.message) {
                     // Successfully sent - remove from queue and update UI
@@ -793,6 +928,9 @@ export const ChatScreen = () => {
                     optimisticIdsRef.current.delete(tempId);
                     processedServerIdsRef.current.add(response.message.id);
                     dispatch(replaceOptimisticMessage({ tempId, realMessage: response.message }));
+                    // Cropped and picked copies live in this app's cache. They
+                    // are delivered now, so reclaim the space.
+                    void discardDraftMediaBatch(imageUris);
                     sent = true;
                   } else if (response?.error === 'duplicate') {
                     // Server detected duplicate - already handled
@@ -824,7 +962,7 @@ export const ChatScreen = () => {
               const isConnected = socket?.connected === true;
               if (isConnected) {
                 try {
-                  const response = await api.post(`/chat/${matchId}/messages`, { content, mediaKeys: finalMediaKeys });
+                  const response = await api.post(`/chat/${matchId}/messages`, { content, mediaKeys: finalMediaKeys, clientMessageId: tempId, replyToId });
                   if (response.data?.success && optimisticIdsRef.current.has(tempId)) {
                     optimisticIdsRef.current.delete(tempId);
                     processedServerIdsRef.current.add(response.data.data.id);
@@ -854,7 +992,7 @@ export const ChatScreen = () => {
     } finally {
       setIsSending(false);
     }
-  }, [text, selectedImages, matchId, dispatch, isSending, currentUserId]);
+  }, [text, selectedImages, matchId, dispatch, isSending, currentUserId, replyingTo]);
 
   const handleToggleEmoji = () => {
     if (showEmoji) {
@@ -908,21 +1046,26 @@ export const ChatScreen = () => {
     const maxAttempts = 3;
     
     try {
-      const ext = 'm4a'; 
+      const sourceExt = uri.split('?')[0].split('.').pop()?.toLowerCase();
+      const ext = sourceExt === 'm4a' ? 'm4a' : 'wav';
       const urlResponse = await api.get(`/chat/${matchId}/media/upload-url?ext=${ext}`);
       if (!urlResponse.data?.success) {
         throw new Error('Failed to get upload URL');
       }
       
-      const { uploadUrl, mediaKey } = urlResponse.data.data;
+      const { uploadUrl, mediaKey, assetId, contentType } = urlResponse.data.data;
       const fileResponse = await fetch(uri);
       const blob = await fileResponse.blob();
       
-      await fetch(uploadUrl, {
+      const uploadResponse = await fetch(uploadUrl, {
         method: 'PUT',
         body: blob,
-        headers: { 'Content-Type': 'audio/m4a' },
+        headers: { 'Content-Type': contentType },
       });
+      if (!uploadResponse.ok) throw new Error('Voice upload failed');
+      const completed = await api.post(`/chat/${matchId}/media/${assetId}/complete`, undefined, { timeout: 120000 });
+      const approvedMediaKey = completed.data.data.mediaKey;
+      const waveform = completed.data.data.waveform;
 
       // Send with retry logic
       while (!sent && attempts < maxAttempts) {
@@ -932,9 +1075,11 @@ export const ChatScreen = () => {
               tempId,
               matchId,
               content: _durationSec ? _durationSec.toString() : '',
-              mediaKeys: [mediaKey],
+              mediaKeys: [approvedMediaKey],
               queuedAt: Date.now(),
               status: 'pending',
+              type: 'voice',
+              metadata: { durationSeconds: _durationSec ?? 0, ...(Array.isArray(waveform) ? { waveform } : {}) },
             });
 
             const socketTimeout = setTimeout(() => {
@@ -946,7 +1091,10 @@ export const ChatScreen = () => {
               socket.emit('send_message', { 
                 matchId, 
                 content: _durationSec ? _durationSec.toString() : '', 
-                mediaKeys: [mediaKey] 
+                mediaKeys: [approvedMediaKey],
+                clientMessageId: tempId,
+                type: 'voice',
+                metadata: { durationSeconds: _durationSec ?? 0 },
               }, (response: any) => {
                 clearTimeout(socketTimeout);
                 if (response?.success && response.message) {
@@ -955,6 +1103,8 @@ export const ChatScreen = () => {
                     processedServerIdsRef.current.add(response.message.id);
                     dispatch(replaceOptimisticMessage({ tempId, realMessage: response.message }));
                     removeFromQueue(tempId);
+                    // The staged recording is uploaded and delivered; reclaim it.
+                    void discardDraftMedia(uri);
                   }
                   sent = true;
                 }
@@ -1088,16 +1238,19 @@ export const ChatScreen = () => {
             <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 1 }}>
               <View style={[
                 styles.connectionDot,
-                connectionStatus === 'connected' ? styles.connected : 
+                connectionStatus === 'connected' ? styles.connected :
                 connectionStatus === 'reconnecting' ? styles.reconnecting : styles.disconnected
               ]} />
               <Text style={styles.headerStatusOffline}>
-                {connectionStatus === 'connected' ? 'online' : 
-                 connectionStatus === 'reconnecting' ? 'reconnecting...' : 'offline'}
+                {connectionStatus === 'connected' ? 'connected' :
+                 connectionStatus === 'reconnecting' ? 'connecting…' : 'offline'}
               </Text>
             </View>
           )}
         </View>
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel="Search this chat" onPress={() => navigation.navigate('MessageSearch', { matchId })}>
+          <Ionicons name="search-outline" size={23} color={colors.text.primary} />
+        </TouchableOpacity>
       </View>
 
       {/* Clipper Frame Acceleration */}
@@ -1113,6 +1266,8 @@ export const ChatScreen = () => {
             hasMore={hasMore}
             typingSenderId={typingSenderId}
             onScroll={handleScroll}
+            onVisibleMessages={acknowledgeVisible}
+            onReply={setReplyingTo}
           />
 
           <AnimatedReanimated.View 
@@ -1139,6 +1294,7 @@ export const ChatScreen = () => {
           </AnimatedReanimated.View>
 
           {/* Input Bar */}
+          {replyingTo && <View style={styles.replyPreview}><View style={{ flex: 1 }}><Text style={styles.replyLabel}>Replying to a message</Text><Text style={styles.replyText} numberOfLines={1}>{replyingTo.content || 'Attachment'}</Text></View><TouchableOpacity onPress={() => setReplyingTo(null)}><Ionicons name="close" size={22} color={colors.text.secondary} /></TouchableOpacity></View>}
           <VoiceRecordBar
             ref={inputRef}
             text={text}
@@ -1234,6 +1390,9 @@ export const ChatScreen = () => {
 };
 
 const styles = StyleSheet.create({
+  replyPreview: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderLeftWidth: 3, borderLeftColor: colors.primary, paddingHorizontal: 14, paddingVertical: 8, marginHorizontal: 10 },
+  replyLabel: { color: colors.primary, fontSize: 12, fontWeight: '700' },
+  replyText: { color: colors.text.secondary, fontSize: 13, marginTop: 2 },
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -1528,11 +1687,18 @@ interface MessageListProps {
   hasMore: boolean;
   typingSenderId: string | null;
   onScroll?: (event: any) => void;
+  onVisibleMessages?: (ids: string[]) => void;
+  onReply: (message: Message) => void;
 }
 
 const MessageList = React.memo(
   React.forwardRef<any, MessageListProps>(
-    ({ messages, currentUserId, onLoadMore, isLoading, hasMore, typingSenderId, onScroll }, ref) => {
+    ({ messages, currentUserId, onLoadMore, isLoading, hasMore, typingSenderId, onScroll, onVisibleMessages, onReply }, ref) => {
+      const visibleCallback = React.useRef(onVisibleMessages);
+      visibleCallback.current = onVisibleMessages;
+      const handleViewableItemsChanged = React.useRef(({ viewableItems }: any) => {
+        visibleCallback.current?.(viewableItems.filter((item: any) => !('type' in item.item)).map((item: any) => item.item.id));
+      }).current;
       // Build flat list data with date separators for inverted list (newest first)
       const renderData = React.useMemo(() => {
         const items: (any | { type: 'date'; date: string })[] = [];
@@ -1585,6 +1751,8 @@ const MessageList = React.memo(
           inverted={true}
           onScroll={onScroll}
           scrollEventThrottle={16}
+          onViewableItemsChanged={handleViewableItemsChanged}
+          viewabilityConfig={{ itemVisiblePercentThreshold: 70, minimumViewTime: 500 }}
           maintainVisibleContentPosition={{
             minIndexForVisible: 0,
             autoscrollToTopThreshold: 10,
@@ -1615,7 +1783,7 @@ const MessageList = React.memo(
             }
             const msg = item;
             const isMe = msg.senderId === currentUserId;
-            return <MessageBubble key={msg.id} message={msg} isMe={isMe} showTime={true} />;
+            return <MessageBubble key={msg.id} message={msg} isMe={isMe} showTime={true} onReply={onReply} replyPreview={messages.find((item) => item.id === msg.replyToId)?.content} />;
           }}
           contentContainerStyle={{ paddingHorizontal: 12 }}
           showsVerticalScrollIndicator={false}

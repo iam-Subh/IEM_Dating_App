@@ -1,22 +1,30 @@
+import { DiscoveryTelemetry } from "./services/discovery-telemetry.service";
 import 'dotenv/config';
 import { createServer } from 'http';
 import app from './app';
 import { logger } from './utils/logger';
-import { setupSocket } from './socket';
+import { closeSocket, setupSocket } from './socket';
 import { prisma } from './utils/prisma';
 import { ImpressionService } from './services/impression.service';
+import { ShadowService } from './services/shadow.service';
+import { validateAuthConfiguration } from './utils/jwt';
+import { OutboxWorker } from './services/outbox.worker';
+import { AccountLifecycleService } from './services/account-lifecycle.service';
 
 const PORT = process.env.PORT || 3000;
 const httpServer = createServer(app);
 
-setupSocket(httpServer);
-
 // Startup sequence
 const bootstrap = async () => {
   try {
+    validateAuthConfiguration();
     // 1. Check Database Connection
     await prisma.$connect();
     logger.info('Database connection established successfully');
+
+    setupSocket(httpServer);
+    OutboxWorker.start();
+    AccountLifecycleService.start();
 
     // 2. Begin draining buffered impressions into Postgres
     ImpressionService.startFlushLoop();
@@ -40,6 +48,11 @@ const shutdown = async (signal: string) => {
     // Drain buffered impressions before the process exits, otherwise the
     // last minute of data is lost on every deploy.
     await ImpressionService.stopFlushLoop();
+    await ShadowService.stop();
+    await DiscoveryTelemetry.flush();
+    await OutboxWorker.stop();
+    AccountLifecycleService.stop();
+    await closeSocket();
     logger.info('Impression buffer flushed');
 
     await prisma.$disconnect();

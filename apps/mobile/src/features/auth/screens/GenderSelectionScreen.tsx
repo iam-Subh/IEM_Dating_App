@@ -137,7 +137,11 @@ export const GenderSelectionScreen = () => {
             </Text>
           </View>
 
-          <ScrollView showsVerticalScrollIndicator={false} style={styles.optionsContainer}>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            style={styles.optionsContainer}
+            contentContainerStyle={styles.optionsContent}
+          >
             {genderOptions.map((option) => (
               <View key={option.id}>
                 <TouchableOpacity
@@ -263,7 +267,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 20,
     paddingTop: Platform.OS === "ios" ? 60 : 40,
-    paddingBottom: Platform.OS === "ios" ? 10 : 0,
+    paddingBottom: Platform.OS === "ios" ? 20 : 0,
   },
   topHeader: {
     flexDirection: 'row',
@@ -299,6 +303,9 @@ const styles = StyleSheet.create({
   },
   optionsContainer: {
     flex: 1,
+  },
+  optionsContent: {
+    paddingBottom: 190,
   },
   genderOption: {
     height: 60,
@@ -380,9 +387,13 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   footer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: Platform.OS === 'ios' ? 0 : -16,
     paddingTop: 10,
     paddingBottom: 0,
-    marginTop: 20,
+    backgroundColor: '#0F1115',
   },
   visibilityToggle: {
     flexDirection: 'row',

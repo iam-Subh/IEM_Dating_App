@@ -46,7 +46,7 @@ export const s3Client = new S3Client({
 const generateFileName = (req: any, file: Express.Multer.File): string => {
   const ext = path.extname(file.originalname);
   const type = file.mimetype.startsWith('video') ? 'videos' : 'photos';
-  return `${type}/${uuidv4()}${ext}`;
+  return `profiles/${req.user.sub}/${type}/${uuidv4()}${ext.toLowerCase()}`;
 };
 
 export const uploadMedia = multer({

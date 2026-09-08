@@ -12,10 +12,7 @@ export const ProfileVibes: React.FC<ProfileVibesProps> = ({ user }) => {
   const attendanceStyle = user.attendanceMood;
   const sectorVSpot = user.hangoutSpots?.[0];
 
-  const socials = user.socials || [
-    { platform: 'Instagram', label: '@atif.robotics', icon: 'logo-instagram', color: '#E1306C' },
-    { platform: 'Spotify', label: "Atif's Focus Mix", icon: 'musical-notes', color: '#1DB954' }
-  ];
+  const socials = Array.isArray(user.socials) ? user.socials : [];
 
   const gridItems = [];
   

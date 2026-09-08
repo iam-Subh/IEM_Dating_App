@@ -78,7 +78,7 @@ export const DistancePreferenceScreen = () => {
           <View style={styles.sliderContainer}>
             <View style={styles.sliderHeader}>
               <Text style={styles.sliderLabel}>Distance preference</Text>
-              <Text style={styles.distanceValue}>{distance} mi</Text>
+              <Text style={styles.distanceValue}>{distance} km</Text>
             </View>
             
             <Slider

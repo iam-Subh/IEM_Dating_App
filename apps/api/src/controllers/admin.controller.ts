@@ -1,3 +1,8 @@
+import { AlgorithmMetricsService } from "../services/algorithm-metrics.service";
+import { DiscoveryTelemetry } from "../services/discovery-telemetry.service";
+import { DISCOVERY_EXPERIMENT_KEY } from "../services/deck.service";
+import { ShadowService } from '../services/shadow.service';
+import { AlgorithmConfigService } from '../services/algorithm-config.service';
 import { Request, Response, NextFunction } from 'express';
 import { ApiResponse } from '../utils/ApiResponse';
 import { prisma } from '../utils/prisma';
@@ -15,10 +20,10 @@ export class AdminController {
   static async getOverview(_req: Request, res: Response, next: NextFunction) {
     try {
       const [totalUsers, activeUsers, totalMatches, totalSwipes, totalMessages] = await Promise.all([
-        prisma.user.count({ where: { isActive: true } }),
+        prisma.user.count({ where: { accountStatus: 'active' } }),
         prisma.user.count({
           where: {
-            isActive: true,
+            accountStatus: 'active',
             lastActiveAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
           },
         }),
@@ -50,34 +55,17 @@ export class AdminController {
    */
   static async getAlgorithmMetrics(_req: Request, res: Response, next: NextFunction) {
     try {
-      const [weights, scoreDistribution] = await Promise.all([
-        prisma.algorithmConfig.findMany({ orderBy: { key: 'asc' } }),
-        prisma.userScore.findMany({
-          select: { desirabilityScore: true },
-          orderBy: { desirabilityScore: 'desc' },
-          take: 100,
-        }),
+      const since = new Date(Date.now() - 7 * 86400000);
+      const [config, delivery, visibility, confirmedUsers, lastReport, measurement] = await Promise.all([
+        AlgorithmConfigService.get(),
+        prisma.discoveryReceipt.groupBy({ by:['algorithm'], where:{deliveredAt:{gte:since}}, _count:true }),
+        prisma.discoveryReceipt.groupBy({ by:['algorithm'], where:{visibleAt:{gte:since}}, _count:true }),
+        prisma.user.count({where:{preferencesConfirmedAt:{not:null}}}),
+        prisma.analyticsEvent.findFirst({where:{eventType:'shadow_report'},orderBy:{createdAt:'desc'},select:{createdAt:true,eventData:true}}),
+        AlgorithmMetricsService.read(),
       ]);
+      res.json(ApiResponse.success({ config, delivery, visibility, confirmedUsers, lastReport, measurement, telemetryWorker: DiscoveryTelemetry.status(), experimentKey: DISCOVERY_EXPERIMENT_KEY, shadowWorker:ShadowService.status(), experimentScope: 'rebuilt_scoring_policy_on_vs_off', algorithmLabels: { '0': 'policy_off', '1': 'policy_on' }, legacyBaseline: false }));
 
-      // Calculate score buckets
-      const buckets: Record<string, number> = {
-        '0-20': 0, '20-40': 0, '40-60': 0, '60-80': 0, '80-100': 0,
-      };
-
-      scoreDistribution.forEach((s) => {
-        const score = s.desirabilityScore;
-        if (score < 20) buckets['0-20']++;
-        else if (score < 40) buckets['20-40']++;
-        else if (score < 60) buckets['40-60']++;
-        else if (score < 80) buckets['60-80']++;
-        else buckets['80-100']++;
-      });
-
-      res.status(200).json(ApiResponse.success({
-        weights: weights.map((w) => ({ key: w.key, value: w.value })),
-        scoreDistribution: buckets,
-        totalScoredUsers: scoreDistribution.length,
-      }));
     } catch (error) {
       next(error);
     }
@@ -86,41 +74,23 @@ export class AdminController {
   /**
    * POST /admin/algorithm/weights
    * Update algorithm weights without redeployment.
-   * Body: { weights: { weight_interests: 0.15, weight_department: 0.10, ... } }
+   * Supply supported weights that sum to one after merging, and a change reason.
    */
   static async updateWeights(req: Request, res: Response, next: NextFunction) {
     try {
-      const { weights } = req.body;
-      if (!weights || typeof weights !== 'object') {
-        res.status(400).json(ApiResponse.error('Invalid weights object'));
-        return;
-      }
-
-      // Validate total equals 1.0
-      const total = Object.values(weights as Record<string, number>).reduce((a, b) => a + b, 0);
-      if (Math.abs(total - 1.0) > 0.01) {
-        res.status(400).json(ApiResponse.error(`Weights must sum to 1.0 (got ${total.toFixed(4)})`));
-        return;
-      }
-
-      // Upsert each weight
-      const updates = await Promise.all(
-        Object.entries(weights as Record<string, number>).map(([key, value]) =>
-          prisma.algorithmConfig.upsert({
-            where: { key },
-            update: { value },
-            create: { key, value },
-          })
-        )
-      );
-
-      res.status(200).json(ApiResponse.success({
-        updated: updates.length,
-        weights: updates.map((w) => ({ key: w.key, value: w.value })),
-      }, 'Algorithm weights updated successfully'));
-    } catch (error) {
-      next(error);
-    }
+      const result = await AlgorithmConfigService.update((req as any).user.sub, req.body.weights, 'weights', req.body.reason);
+      res.json(ApiResponse.success(result));
+    } catch (error) { next(error); }
+  }
+  static async updateFlags(req: Request, res: Response, next: NextFunction) {
+    try {
+      const result = await AlgorithmConfigService.update((req as any).user.sub, req.body.flags, 'flags', req.body.reason);
+      res.json(ApiResponse.success(result));
+    } catch (error) { next(error); }
+  }
+  static async getConfig(_req: Request, res: Response, next: NextFunction) {
+    try { res.json(ApiResponse.success(await AlgorithmConfigService.get())); }
+    catch (error) { next(error); }
   }
 
   /**
@@ -132,7 +102,7 @@ export class AdminController {
       const reports = await prisma.safetyReport.findMany({
         where: { status: 'pending' },
         include: {
-          reportedUser: { select: { id: true, name: true, email: true, isActive: true } },
+          reportedUser: { select: { id: true, name: true, email: true, accountStatus: true } },
           reporter: { select: { id: true, name: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -168,35 +138,13 @@ export class AdminController {
    */
   static async getBotUsers(_req: Request, res: Response, next: NextFunction) {
     try {
-      const suspectScores = await prisma.userScore.findMany({
-        where: {
-          totalSwipesOut: { gte: 50 },
-        },
-        include: {
-          user: { select: { id: true, name: true, email: true, createdAt: true, isActive: true } },
-        },
-        orderBy: { totalSwipesOut: 'desc' },
-        take: 50,
-      });
+      const users = await prisma.$queryRaw<{swiper_id:string;count:bigint}[]>`
+        SELECT swiper_id,count(*) AS count FROM swipes WHERE created_at >= now()-interval '1 minute'
+        GROUP BY swiper_id HAVING count(*) > 60 ORDER BY count(*) DESC LIMIT 50`;
+      res.json(ApiResponse.success({ totalSuspects: users.length,
+        suspects: users.map(u => ({ userId:u.swiper_id,swipesLastMinute:Number(u.count) })),
+        note:'High swipe activity is a review signal. It does not establish a bot or hide a profile.' }));
 
-      const bots = suspectScores.filter((s) => {
-        const accountAgeHours = Math.max(
-          (Date.now() - s.user.createdAt.getTime()) / (1000 * 60 * 60), 1
-        );
-        const swipeSpeed = s.totalSwipesOut / accountAgeHours;
-        const rightRatio = s.totalRightSwipes / Math.max(s.totalSwipesOut, 1);
-        return swipeSpeed > 50 || (rightRatio > 0.95 && s.totalSwipesOut > 100);
-      });
-
-      res.status(200).json(ApiResponse.success({
-        totalSuspects: bots.length,
-        bots: bots.map((s) => ({
-          user: s.user,
-          totalSwipes: s.totalSwipesOut,
-          rightSwipeRatio: (s.totalRightSwipes / Math.max(s.totalSwipesOut, 1)).toFixed(2),
-          desirabilityScore: s.desirabilityScore,
-        })),
-      }));
     } catch (error) {
       next(error);
     }

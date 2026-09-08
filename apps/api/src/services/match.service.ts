@@ -1,9 +1,36 @@
+import { SwipeService } from './swipe.service';
 import { prisma } from '../utils/prisma';
 import { redisClient } from '../utils/redis';
 import { ImpressionService } from './impression.service';
 import { logger } from '../utils/logger';
+import { ageAt } from './eligibility.service';
+import { HttpError } from '../utils/httpError';
+import { evictMatchRoom } from '../socket';
+import { AccountEventService } from './account-event.service';
 
 export class MatchService {
+  static async unmatch(userId: string, matchId: string) {
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${matchId}, 1))`;
+      const match = await tx.match.findFirst({
+        where: { id: matchId, OR: [{ user1Id: userId }, { user2Id: userId }] },
+        select: { id: true, status: true, user1Id: true, user2Id: true },
+      });
+      if (!match) throw new HttpError(404, 'Match is unavailable', 'MATCH_UNAVAILABLE');
+      if (match.status !== 'active') return { matchId, repeated: true };
+      await tx.match.update({ where: { id: matchId }, data: { status: 'unmatched' } });
+      await tx.follow.updateMany({
+        where: { OR: [{ followerId: match.user1Id, followeeId: match.user2Id }, { followerId: match.user2Id, followeeId: match.user1Id }] },
+        data: { status: 'removed', removedAt: new Date(), revision: { increment: 1 } },
+      });
+      await AccountEventService.append(tx, {
+        userIds: [match.user1Id, match.user2Id], type: 'access.revoked', matchId, payload: { reason: 'unmatched' },
+      });
+      return { matchId, repeated: false };
+    });
+    evictMatchRoom(matchId);
+    return result;
+  }
   /**
    * Get all active matches for a user, with the other user's profile info.
    */
@@ -21,7 +48,7 @@ export class MatchService {
           select: {
             id: true,
             name: true,
-            age: true,
+            birthday: true,
             department: true,
             avatarUrl: true,
             photos: {
@@ -35,7 +62,7 @@ export class MatchService {
           select: {
             id: true,
             name: true,
-            age: true,
+            birthday: true,
             department: true,
             avatarUrl: true,
             photos: {
@@ -46,6 +73,7 @@ export class MatchService {
           },
         },
         messages: {
+          where: { isDeleted: false, NOT: { hiddenBy: { has: userId } } },
           orderBy: { sentAt: 'desc' },
           take: 1,
           select: {
@@ -67,7 +95,7 @@ export class MatchService {
         user: {
           id: otherUser.id,
           name: otherUser.name,
-          age: otherUser.age,
+          age: ageAt(otherUser.birthday),
           department: otherUser.department,
           avatar: otherUser.avatarUrl || otherUser.photos[0]?.photoUrl || null,
         },
@@ -79,97 +107,7 @@ export class MatchService {
     });
   }
 
-  /**
-   * Perform a swipe action with daily limit enforcement.
-   * Creates a Match record on mutual like.
-   */
-  static async performSwipe(
-    userId: string,
-    targetUserId: string,
-    action: 'like' | 'pass'
-  ) {
-    // Enforce daily swipe limit via Redis
-    const dateStr = new Date().toISOString().split('T')[0];
-    const limitKey = `swipes:${userId}:${dateStr}`;
-
-    const swipeCount = await redisClient.incr(limitKey);
-    if (swipeCount === 1) {
-      await redisClient.expire(limitKey, 86400);
-    }
-
-    if (swipeCount > 100) {
-      throw new Error('Daily swipe limit (100) reached. Try again tomorrow!');
-    }
-
-    // Record swipe
-    await prisma.swipe.upsert({
-      where: {
-        swiperId_targetId: {
-          swiperId: userId,
-          targetId: targetUserId,
-        },
-      },
-      update: { action },
-      create: {
-        swiperId: userId,
-        targetId: targetUserId,
-        action,
-      },
-    });
-
-    // Close the loop on the impression that led to this swipe, so
-    // click-through rate is available without joining the swipes table.
-    ImpressionService.markActed(userId, targetUserId).catch(() => {});
-
-    // Check for mutual match
-    let matchCreated = false;
-    let matchId: string | undefined;
-
-    if (action === 'like') {
-      const mutualLike = await prisma.swipe.findUnique({
-        where: {
-          swiperId_targetId: {
-            swiperId: targetUserId,
-            targetId: userId,
-          },
-        },
-      });
-
-      if (mutualLike && mutualLike.action === 'like') {
-        // Check if match already exists
-        const existingMatch = await prisma.match.findFirst({
-          where: {
-            OR: [
-              { user1Id: userId, user2Id: targetUserId },
-              { user1Id: targetUserId, user2Id: userId },
-            ],
-          },
-        });
-
-        if (!existingMatch) {
-          const match = await prisma.match.create({
-            data: {
-              user1Id: userId,
-              user2Id: targetUserId,
-              status: 'active',
-            },
-          });
-          matchCreated = true;
-          matchId = match.id;
-          logger.info(`[MATCH] New match created: ${match.id} between ${userId.slice(0, 8)} and ${targetUserId.slice(0, 8)}`);
-        } else {
-          matchCreated = true;
-          matchId = existingMatch.id;
-        }
-      }
-    }
-
-    return {
-      status: 'recorded',
-      action,
-      swipeCount,
-      matchCreated,
-      matchId,
-    };
+  static async performSwipe(userId: string, targetUserId: string, action: 'like' | 'pass') {
+    return SwipeService.perform(userId, targetUserId, action);
   }
 }

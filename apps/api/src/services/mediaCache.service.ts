@@ -79,7 +79,7 @@ export class MediaCacheService {
         const data = this.parseJSON<any>(cached);
         if (data && data.expiresAt > Date.now()) {
           const loadTime = Date.now() - startTime;
-          logger.info(`[MediaCache] Cache HIT for user ${userId} - ${loadTime}ms`);
+          logger.info(`[MediaCache] Cache HIT - ${loadTime}ms`);
           return data;
         }
         // Expired - delete and refresh
@@ -87,7 +87,7 @@ export class MediaCacheService {
       }
       
       const loadTimeMs = Date.now() - startTime;
-      logger.info(`[MediaCache] Cache MISS for user ${userId} - check time ${loadTimeMs}ms`);
+      logger.info(`[MediaCache] Cache MISS - check time ${loadTimeMs}ms`);
       
       // Cache miss - we do NOT block the caller here by filling it
       // The caller will fetch from DB, we can async cache it
@@ -107,7 +107,7 @@ export class MediaCacheService {
       if (redisClient.status !== 'ready') return;
       await redisClient.del(`media:${userId}`);
       await redisClient.del(`preview:${userId}`);
-      logger.info(`[MediaCache] Invalidated cache for user ${userId}`);
+      logger.info('[MediaCache] Invalidated cache');
     } catch (error) {
       logger.error('[MediaCache] Error invalidating cache:', error);
     }

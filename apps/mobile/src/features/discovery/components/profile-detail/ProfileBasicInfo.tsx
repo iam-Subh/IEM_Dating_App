@@ -1,3 +1,4 @@
+import { compatibilityValue, compatibilityColor } from '../../compatibility';
 import React, { useRef, useEffect } from 'react';
 import { View, Text, StyleSheet, Animated, Easing } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
@@ -8,12 +9,8 @@ interface ProfileBasicInfoProps {
 }
 
 export const ProfileBasicInfo: React.FC<ProfileBasicInfoProps> = ({ user }) => {
-  const matchPercentage = user.matchPercentage || 98;
-  const getBadgeColor = (percentage: number) => {
-    if (percentage >= 60) return '#4ade80';
-    if (percentage >= 40) return '#facc15';
-    return '#f87171';
-  };
+  const matchPercentage = compatibilityValue(user.matchPercentage);
+  const getBadgeColor = compatibilityColor;
 
   const getAge = (dob: string | Date | undefined) => {
     if (!dob) return '';
@@ -21,8 +18,8 @@ export const ProfileBasicInfo: React.FC<ProfileBasicInfoProps> = ({ user }) => {
     return Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25)).toString();
   };
 
-  const age = user.age || getAge(user.dob) || user.year?.replace(' Year', '') || '';
-  const college = user.college || 'IEM Kolkata';
+  const age = user.age ?? '';
+  const college = user.college || 'Not specified';
 
   // Animations
   const pillScale = useRef(new Animated.Value(0)).current;
@@ -135,14 +132,14 @@ export const ProfileBasicInfo: React.FC<ProfileBasicInfoProps> = ({ user }) => {
             </View>
           )}
 
-          {user.year && (
+          {user.graduationYear && (
             <View style={[styles.lifestyleRow, styles.rowBorder]}>
               <View style={styles.rowHeader}>
                 <Text style={styles.rowLabelText}>Batch</Text>
               </View>
               <View style={styles.rowValueContainer}>
                 <Ionicons name="calendar-outline" size={18} color="#8e8e93" style={styles.rowIcon} />
-                <Text style={styles.rowValueText}>Class of {user.year}</Text>
+                <Text style={styles.rowValueText}>Class of {user.graduationYear}</Text>
               </View>
             </View>
           )}

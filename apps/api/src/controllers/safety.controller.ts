@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { SafetyService } from '../services/safety.service';
 import { ApiResponse } from '../utils/ApiResponse';
+import { z } from 'zod';
 
 export class SafetyController {
   /**
@@ -49,5 +50,33 @@ export class SafetyController {
     } catch (error) {
       next(error);
     }
+  }
+
+  static async getCases(req: Request, res: Response, next: NextFunction) {
+    try {
+      const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+      const page = Math.max(1, Number(req.query.page) || 1);
+      res.json(ApiResponse.success(await SafetyService.getCases(status, page)));
+    } catch (error) { next(error); }
+  }
+
+  static async updateCase(req: Request, res: Response, next: NextFunction) {
+    try {
+      const schema = z.object({
+        status: z.enum(['open', 'reviewing', 'resolved', 'dismissed']).optional(),
+        priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
+        assignedAdminId: z.string().uuid().nullable().optional(),
+        accountAction: z.enum(['none', 'restrict', 'ban', 'restore']).optional(),
+        resolution: z.string().min(1).max(2000).optional(),
+      }).strict().refine((value) => Object.keys(value).length > 0);
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json(ApiResponse.error('Invalid moderation case update'));
+      const result = await SafetyService.updateCase(
+        req.params.id as string,
+        (req as any).user.sub,
+        parsed.data,
+      );
+      res.json(ApiResponse.success(result));
+    } catch (error) { next(error); }
   }
 }

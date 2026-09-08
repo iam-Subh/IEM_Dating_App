@@ -87,11 +87,13 @@ export const EditSocialScreen = () => {
             <View style={styles.inputContainer}>
               <TextInput 
                 style={styles.input} 
-                placeholder="e.g. Chai stall near RDB, Cafe coffee day..." 
+                placeholder="e.g. RDB chai stall or CCD"
                 placeholderTextColor="rgba(255,255,255,0.3)" 
                 value={hangoutSpot} 
                 onChangeText={setHangoutSpot} 
                 multiline
+                numberOfLines={2}
+                maxLength={100}
                 textAlignVertical="top"
               />
             </View>
@@ -124,10 +126,13 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   input: { 
-    minHeight: 80, 
+    minHeight: 72,
+    maxHeight: 96,
     color: '#FFF', 
-    fontSize: 16,
-    paddingVertical: 12,
-    paddingTop: 12,
+    fontSize: 15,
+    lineHeight: 21,
+    paddingVertical: 13,
+    includeFontPadding: false,
+    textAlignVertical: 'top',
   },
 });

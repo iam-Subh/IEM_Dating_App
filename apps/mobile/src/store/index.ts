@@ -8,6 +8,7 @@ import chatReducer from './chatSlice';
 const persistConfig = {
   key: 'root',
   storage: AsyncStorage,
+  blacklist: ['token'],
 };
 
 const persistedAuthReducer = persistReducer(persistConfig, authReducer);

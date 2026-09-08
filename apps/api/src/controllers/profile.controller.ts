@@ -6,8 +6,26 @@ import { ApiResponse } from '../utils/ApiResponse';
 
 import { MediaCacheService } from '../services/mediaCache.service';
 import { RecommendationService } from '../services/recommendation.service';
+import { OnboardingService } from '../services/onboarding.service';
 
 export class ProfileController {
+  static async getReadiness(req: Request, res: Response, next: NextFunction) {
+    try {
+      const status = await OnboardingService.getStatus((req as any).user.sub);
+      res.status(200).json(ApiResponse.success(status));
+    } catch (error) {
+      next(error);
+    }
+  }
+  static async removeLocation(req: Request, res: Response, next: NextFunction) {
+    try {
+      await prisma.user.update({ where: { id: (req as any).user.sub }, data: {
+        latitude: null, longitude: null, locationConsentAt: null, locationUpdatedAt: null,
+        preferencesConfirmedAt: null, eligibilityVersion: { increment: 1 },
+      } });
+      res.json({ success: true });
+    } catch (error) { next(error); }
+  }
   static async getProfile(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = (req as any).user.sub;
@@ -28,13 +46,10 @@ export class ProfileController {
   static async updateProfile(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = (req as any).user.sub;
-      console.log('Update Profile Request Body:', JSON.stringify(req.body, null, 2));
+
       const profile = await ProfileService.updateProfile(userId, req.body);
       res.status(200).json(ApiResponse.success(profile, 'Profile updated successfully'));
     } catch (error: any) {
-      console.error('Update Profile Error:', error?.message);
-      console.error('Prisma Error Code:', error?.code);
-      console.error('Prisma Error Meta:', JSON.stringify(error?.meta, null, 2));
       next(error);
     }
   }

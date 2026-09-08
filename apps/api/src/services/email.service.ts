@@ -11,12 +11,21 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// Verify connection on startup
-transporter.verify().then(() => {
-  logger.info('SMTP email transporter ready');
-}).catch((err) => {
-  logger.error('SMTP connection failed:', err);
-});
+const hasSmtpCredentials = Boolean(
+  process.env.SMTP_USER && process.env.SMTP_PASS,
+);
+
+// Do not open an SMTP connection in test or local processes that have no credentials.
+if (hasSmtpCredentials) {
+  transporter
+    .verify()
+    .then(() => {
+      logger.info('SMTP email transporter ready');
+    })
+    .catch((err) => {
+      logger.error('SMTP connection failed:', err);
+    });
+}
 
 export class EmailService {
   static async sendOTP(to: string, code: string): Promise<void> {
@@ -96,9 +105,9 @@ export class EmailService {
         html,
         text: `Your IEM Connect verification code is: ${code}\n\nThis code expires in 5 minutes.\n\nIf you didn't request this, ignore this email.`,
       });
-      logger.info(`OTP email sent to ${to}`);
+      logger.info('OTP email sent');
     } catch (error) {
-      logger.error(`Failed to send OTP email to ${to}:`, error);
+      logger.error('Failed to send OTP email');
       throw new Error('Failed to send verification email. Please try again.');
     }
   }

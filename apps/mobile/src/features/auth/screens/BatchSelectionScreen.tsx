@@ -49,7 +49,7 @@ export const BatchSelectionScreen = () => {
     
     navigation.navigate("CampusSelection", {
       ...route.params,
-      year: selectedBatch,
+      graduationYear: selectedBatch,
     });
   };
 

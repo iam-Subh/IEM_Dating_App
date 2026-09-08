@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   Image,
   RefreshControl,
   Dimensions,
+  TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -16,11 +17,14 @@ import { RootState } from '../../store';
 import { api } from '../../services/api';
 import {
   setConversations,
+  appendConversations,
   setLoadingConversations,
   Conversation,
 } from '../../store/chatSlice';
 import { colors } from '../../core/theme/colors';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { getSocket, initSocket } from '../../services/socket';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
 
@@ -145,24 +149,67 @@ export const ChatListScreen = () => {
   const conversations = useSelector((state: RootState) => state.chat.conversations);
   const isLoading = useSelector((state: RootState) => state.chat.isLoadingConversations);
   const currentUserId = useSelector((state: RootState) => state.auth.user?.id);
+  const navigation = useNavigation<any>();
+  const [stories, setStories] = useState<any[]>([]);
+  const [query, setQuery] = useState('');
+  const conversationCursor = useRef<string | null>(null);
+  const storyCursor = useRef<string | null>(null);
 
-  const fetchConversations = useCallback(async () => {
+  const fetchStories = useCallback(async (restart = true) => {
+    const response = await api.get('/stories/feed', { params: { limit: 50, ...(!restart && storyCursor.current ? { cursor: storyCursor.current } : {}) } });
+    const page = response.data.data;
+    setStories((current) => restart ? page.items : [...current, ...page.items.filter((item: any) => !current.some((existing) => existing.id === item.id))]);
+    storyCursor.current = page.nextCursor;
+  }, []);
+
+  const fetchConversations = useCallback(async (restart = true) => {
     try {
       dispatch(setLoadingConversations(true));
-      const response = await api.get('/chat/conversations');
+      const response = await api.get('/chat/conversations', { params: { ...(query.trim() ? { q: query.trim() } : {}), ...(!restart && conversationCursor.current ? { cursor: conversationCursor.current } : {}), limit: 30 } });
       if (response.data?.success) {
-        dispatch(setConversations(response.data.data));
+        const page = response.data.data;
+        dispatch(restart ? setConversations(page.items) : appendConversations(page.items));
+        conversationCursor.current = page.nextCursor;
       }
     } catch (err) {
       console.error('[ChatList] Error fetching conversations:', err);
     } finally {
       dispatch(setLoadingConversations(false));
     }
-  }, [dispatch]);
+  }, [dispatch, query]);
+
+  const syncAccountEvents = useCallback(async () => {
+    if (!currentUserId) return;
+    const key = `account-event-seq:${currentUserId}`;
+    let afterSeq = Number(await AsyncStorage.getItem(key) ?? 0);
+    let changed = false;
+    for (let page = 0; page < 10; page += 1) {
+      const response = await api.get('/chat/account-events', { params: { afterSeq, limit: 200 } });
+      const result = response.data.data;
+      if (result.resetRequired) { afterSeq = result.highWaterSeq; changed = true; break; }
+      changed = changed || result.events.length > 0;
+      afterSeq = result.nextSeq;
+      if (!result.hasMore) break;
+    }
+    await AsyncStorage.setItem(key, String(afterSeq));
+    if (changed) await fetchConversations(true);
+  }, [currentUserId, fetchConversations]);
 
   useEffect(() => {
-    fetchConversations();
+    const timer = setTimeout(fetchConversations, 250);
+    return () => clearTimeout(timer);
   }, [fetchConversations]);
+  useFocusEffect(useCallback(() => {
+    fetchStories(true).catch(() => undefined);
+    fetchConversations();
+    syncAccountEvents().catch(() => undefined);
+    initSocket();
+    const socket = getSocket();
+    const refresh = () => fetchConversations();
+    socket?.on('new_message', refresh);
+    socket?.on('chat_event', refresh);
+    return () => { socket?.off('new_message', refresh); socket?.off('chat_event', refresh); };
+  }, [fetchConversations, fetchStories, syncAccountEvents]));
 
   const totalUnread = conversations.reduce((sum: number, c: Conversation) => sum + c.unreadCount, 0);
 
@@ -178,7 +225,30 @@ export const ChatListScreen = () => {
             </View>
           )}
         </View>
+        <View style={{ flexDirection: 'row', gap: 16 }}><TouchableOpacity accessibilityLabel="Search messages" onPress={() => navigation.navigate('MessageSearch')}><Ionicons name="search-outline" size={24} color={colors.text.primary} /></TouchableOpacity><TouchableOpacity accessibilityLabel="Follow requests" onPress={() => navigation.navigate('FollowRequests')}><Ionicons name="person-add-outline" size={24} color={colors.text.primary} /></TouchableOpacity></View>
       </View>
+      <View style={styles.searchBox}><Ionicons name="search" size={18} color={colors.text.tertiary} /><TextInput value={query} onChangeText={setQuery} placeholder="Search conversations" placeholderTextColor={colors.text.tertiary} style={styles.searchInput} /></View>
+
+      <FlatList
+        horizontal
+        data={[{ id: 'create', create: true }, ...stories]}
+        keyExtractor={(item) => item.id}
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.storyTray}
+        onEndReached={() => { if (storyCursor.current) void fetchStories(false); }}
+        onEndReachedThreshold={0.5}
+        renderItem={({ item }) => item.create ? (
+          <TouchableOpacity style={styles.storyItem} onPress={() => navigation.navigate('CreateStory')}>
+            <View style={styles.createStory}><Ionicons name="add" size={25} color="#fff" /></View>
+            <Text style={styles.storyName}>Your story</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity style={styles.storyItem} onPress={() => navigation.navigate('StoryViewer', { stories, initialStoryId: item.id })}>
+            <View style={styles.storyRing}><Image source={{ uri: item.owner?.avatarUrl || DEFAULT_AVATAR }} style={styles.storyAvatar} /></View>
+            <Text style={styles.storyName} numberOfLines={1}>{item.owner?.name}</Text>
+          </TouchableOpacity>
+        )}
+      />
 
       {/* Conversations List */}
       <FlatList
@@ -202,6 +272,8 @@ export const ChatListScreen = () => {
         }
         showsVerticalScrollIndicator={false}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
+        onEndReached={() => { if (conversationCursor.current && !isLoading) void fetchConversations(false); }}
+        onEndReachedThreshold={0.4}
       />
     </View>
   );
@@ -219,6 +291,9 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   headerLeft: {
     flexDirection: 'row',
@@ -258,6 +333,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.border,
     marginLeft: 88,
   },
+  searchBox: { marginHorizontal: 20, marginTop: 10, height: 42, borderRadius: 14, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8 },
+  searchInput: { flex: 1, color: colors.text.primary, fontSize: 15 },
+  storyTray: { paddingHorizontal: 16, paddingVertical: 12, gap: 12 },
+  storyItem: { width: 68, alignItems: 'center' },
+  storyRing: { width: 62, height: 62, borderRadius: 31, padding: 2, borderWidth: 2, borderColor: colors.primary },
+  storyAvatar: { width: '100%', height: '100%', borderRadius: 28, backgroundColor: colors.surface },
+  createStory: { width: 62, height: 62, borderRadius: 31, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
+  storyName: { color: colors.text.secondary, fontSize: 11, marginTop: 5, width: 68, textAlign: 'center' },
   // Conversation Item
   conversationItem: {
     flexDirection: 'row',

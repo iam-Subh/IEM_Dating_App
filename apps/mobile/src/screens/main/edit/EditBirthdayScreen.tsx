@@ -75,7 +75,14 @@ export const EditBirthdayScreen = () => {
   };
 
   const handleKeyPress = (e: any, index: number, type: 'day' | 'month' | 'year') => {
-    if (e.nativeEvent.key === 'Backspace') {
+    const key = e.nativeEvent.key;
+
+    if (/^\d$/.test(key)) {
+      updateDigit(key, index, type);
+      return;
+    }
+
+    if (key === 'Backspace') {
       if (type === 'day' && index > 0 && !day[index]) dayRefs.current[index - 1]?.focus();
       else if (type === 'month') {
         if (index > 0 && !month[index]) monthRefs.current[index - 1]?.focus();
@@ -88,22 +95,32 @@ export const EditBirthdayScreen = () => {
   };
 
   const updateDigit = (val: string, index: number, type: 'day' | 'month' | 'year') => {
-    const digit = val.replace(/[^0-9]/g, '');
-    if (!digit && val !== '') return;
+    const digits = val.replace(/[^0-9]/g, '');
+    if (!digits && val !== '') return;
+
+    const currentDigit = type === 'day' ? day[index] : type === 'month' ? month[index] : year[index];
+    let digit = digits;
+
+    // A filled input can briefly contain the old and new digits. Keep the new one.
+    if (digits.length > 1) {
+      digit = currentDigit && digits.startsWith(currentDigit)
+        ? digits.slice(-1)
+        : digits.charAt(0);
+    }
     if (type === 'day') {
       if (index === 0 && parseInt(digit) > 3) return;
       const n = [...day]; n[index] = digit; setDay(n);
-      if (digit && index < 1) dayRefs.current[index + 1]?.focus();
-      else if (digit && index === 1) monthRefs.current[0]?.focus();
+      if (digit && !currentDigit && index < 1) dayRefs.current[index + 1]?.focus();
+      else if (digit && !currentDigit && index === 1) monthRefs.current[0]?.focus();
     } else if (type === 'month') {
       if (index === 0 && parseInt(digit) > 1) return;
       const n = [...month]; n[index] = digit; setMonth(n);
-      if (digit && index < 1) monthRefs.current[index + 1]?.focus();
-      else if (digit && index === 1) yearRefs.current[0]?.focus();
+      if (digit && !currentDigit && index < 1) monthRefs.current[index + 1]?.focus();
+      else if (digit && !currentDigit && index === 1) yearRefs.current[0]?.focus();
     } else {
       if (index === 0 && parseInt(digit) > 2) return;
       const n = [...year]; n[index] = digit; setYear(n);
-      if (digit && index < 3) yearRefs.current[index + 1]?.focus();
+      if (digit && !currentDigit && index < 3) yearRefs.current[index + 1]?.focus();
     }
   };
 
@@ -181,7 +198,7 @@ const styles = StyleSheet.create({
     fontSize: 20,
     color: "#FFF",
     fontWeight: "700",
-    marginTop: 20,
+    marginTop: 12,
     textAlign: "center",
     backgroundColor: "rgba(255,255,255,0.1)",
     paddingVertical: 8,

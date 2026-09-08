@@ -168,7 +168,7 @@ export const AnimatedBlurBackground: React.FC = () => {
 
 const styles = StyleSheet.create({
   container: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: '#140505', // Deep dark red base per prompt
     overflow: 'hidden',
   },
@@ -177,7 +177,7 @@ const styles = StyleSheet.create({
     opacity: 0.7, // Base opacity for fluid layers
   },
   noiseOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(255,255,255,0.02)', // Subtle noise simulation if image missing
   },
   bottomGradient: {

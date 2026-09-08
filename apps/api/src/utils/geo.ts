@@ -52,7 +52,7 @@ export function haversineKm(a: Coords, b: Coords): number {
     Math.sin(dLat / 2) ** 2 +
     Math.sin(dLng / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2);
 
-  return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(h));
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(Math.max(0, Math.min(1, h))));
 }
 
 /**
@@ -60,20 +60,22 @@ export function haversineKm(a: Coords, b: Coords): number {
  * the exact haversine pass, so the database never scans the whole table.
  */
 export function boundingBox(center: Coords, radiusKm: number) {
-  const latDelta = radiusKm / 111.32;
+  const latDelta = radiusKm / EARTH_RADIUS_KM * 180 / Math.PI;
 
   // Longitude degrees shrink towards the poles. Guard against the cosine
   // collapsing to ~0 near them, which would produce an unusable box.
   const cosLat = Math.cos(toRad(center.latitude));
-  const lngDelta = Math.abs(cosLat) < 0.01
+  const lngDelta = Math.abs(center.latitude) + latDelta >= 90
     ? 180
-    : radiusKm / (111.32 * Math.abs(cosLat));
+    : Math.asin(Math.min(1, Math.sin(radiusKm / EARTH_RADIUS_KM) / Math.abs(cosLat))) * 180 / Math.PI;
+  // Use the full longitude range when the box crosses the antimeridian.
+  const wraps = center.longitude - lngDelta < -180 || center.longitude + lngDelta > 180;
 
   return {
     minLat: Math.max(-90, center.latitude - latDelta),
     maxLat: Math.min(90, center.latitude + latDelta),
-    minLng: Math.max(-180, center.longitude - lngDelta),
-    maxLng: Math.min(180, center.longitude + lngDelta),
+    minLng: wraps ? -180 : Math.max(-180, center.longitude - lngDelta),
+    maxLng: wraps ? 180 : Math.min(180, center.longitude + lngDelta),
   };
 }
 
@@ -82,7 +84,7 @@ export function boundingBox(center: Coords, radiusKm: number) {
  */
 export function distanceLabel(km: number): string {
   if (km < 1) return 'Less than 1 km away';
-  if (km < 5) return `${Math.round(km)} km away`;
+  if (km < 5) return '1-5 km away';
   if (km < 10) return '5-10 km away';
   if (km < 25) return '10-25 km away';
   if (km < 50) return '25-50 km away';

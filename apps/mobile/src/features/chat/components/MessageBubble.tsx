@@ -1,16 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Dimensions, Image, ActivityIndicator, Alert, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, Dimensions, Image, ActivityIndicator, Alert, TouchableOpacity, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio } from 'expo-av';
+import { setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import Slider from '@react-native-community/slider';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { useQuery } from '@tanstack/react-query';
 import { colors } from '../../../core/theme/colors';
-import { Message, removeMessage } from '../../../store/chatSlice';
+import { applyMessageEdit, applyReaction, Message, removeMessage } from '../../../store/chatSlice';
 import { LinearGradient } from 'expo-linear-gradient';
 import { api } from '../../../services/api';
 import { ImageModal } from './ImageModal';
 import { MessageOptionsSheet } from './MessageOptionsSheet';
+import { RootState } from '../../../store';
 
 const { width } = Dimensions.get('window');
 
@@ -25,8 +26,9 @@ const VoicePlayerBubble = ({
   isMe, 
   initialDuration, 
   sentAt, 
-  messageId, 
-  readAt 
+  messageId,
+  readAt,
+  waveform,
 }: { 
   uri: string; 
   isMe: boolean; 
@@ -34,76 +36,45 @@ const VoicePlayerBubble = ({
   sentAt?: string; 
   messageId?: string; 
   readAt?: string | null; 
+  waveform?: number[];
 }) => {
-  const soundRef = React.useRef<Audio.Sound | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [durationMs, setDurationMs] = useState<number>(initialDuration ? parseFloat(initialDuration) * 1000 : 0);
-  const [positionMs, setPositionMs] = useState(0);
+  const player = useAudioPlayer(uri, { updateInterval: 100 });
+  const status = useAudioPlayerStatus(player);
+  const initialDurationMs = initialDuration ? parseFloat(initialDuration) * 1000 : 0;
+  const isPlaying = status.playing;
+  const durationMs = status.duration > 0 ? status.duration * 1000 : initialDurationMs;
+  const positionMs = status.currentTime * 1000;
 
-  // Unload on unmount
   useEffect(() => {
-    return () => {
-      soundRef.current?.unloadAsync().catch(() => {});
-      soundRef.current = null;
-    };
-  }, []);
-
-  const onPlaybackStatusUpdate = React.useCallback((status: any) => {
-    if (!status.isLoaded) return;
-    setPositionMs(status.positionMillis ?? 0);
-    setDurationMs(status.durationMillis ?? 0);
-    setIsPlaying(status.isPlaying ?? false);
     if (status.didJustFinish) {
-      setIsPlaying(false);
-      setPositionMs(0);
-      soundRef.current?.setPositionAsync(0).catch(() => {});
+      player.seekTo(0).catch(() => {});
     }
-  }, []);
-
-  const ensureLoaded = React.useCallback(async (): Promise<Audio.Sound | null> => {
-    if (soundRef.current) return soundRef.current;
-    try {
-      const { sound } = await Audio.Sound.createAsync(
-        { uri },
-        { shouldPlay: false },
-        onPlaybackStatusUpdate,
-      );
-      soundRef.current = sound;
-      return sound;
-    } catch (err) {
-      console.error('[VoicePlayer] Load error:', err);
-      return null;
-    }
-  }, [uri, onPlaybackStatusUpdate]);
+  }, [player, status.didJustFinish]);
 
   const handlePlayPause = React.useCallback(async () => {
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
       });
 
-      const snd = await ensureLoaded();
-      if (!snd) return;
-
       if (isPlaying) {
-        await snd.pauseAsync();
+        player.pause();
       } else {
-        await snd.playAsync();
+        player.play();
       }
     } catch (err) {
       console.error('[VoicePlayer] Toggle error:', err);
     }
-  }, [isPlaying, ensureLoaded]);
+  }, [isPlaying, player]);
 
   const handleSeek = React.useCallback(async (value: number) => {
     try {
-      const snd = await ensureLoaded();
-      if (snd) await snd.setPositionAsync(value);
+      await player.seekTo(value / 1000);
     } catch {
       // ignore seek errors
     }
-  }, [ensureLoaded]);
+  }, [player]);
 
   const formatTime = (millis: number) => {
     const totalSec = Math.floor(millis / 1000);
@@ -112,19 +83,19 @@ const VoicePlayerBubble = ({
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  const mockHeights = [
+  const fallbackHeights = [
     10, 16, 12, 18, 24, 14, 20, 16, 22, 18, 14, 12, 18, 14, 20, 16, 24, 12, 16, 
     10, 18, 22, 16, 20, 12, 18, 14, 24, 16, 14, 18, 12, 20, 16, 10
   ];
+  const barHeights = waveform?.length ? waveform.map((value) => 6 + Math.round(value * 20)) : fallbackHeights;
 
   const handleWaveformPress = (evt: any) => {
     const x = evt.nativeEvent.locationX;
     // Assuming container flex layout leaves roughly 150-180px for the bars
-    const widthEstimate = mockHeights.length * 5; // index * (width+margin)
+    const widthEstimate = barHeights.length * 5; // index * (width+margin)
     const pct = Math.min(Math.max(x / widthEstimate, 0), 1);
     const targetMs = pct * durationMs;
-    soundRef.current?.setPositionAsync(targetMs).catch(() => {});
-    setPositionMs(targetMs);
+    player.seekTo(targetMs / 1000).catch(() => {});
   };
 
   const Container = isMe ? LinearGradient : View;
@@ -167,9 +138,9 @@ const VoicePlayerBubble = ({
           onPress={handleWaveformPress} 
           style={{ flexDirection: 'row', alignItems: 'center', height: 26 }}
         >
-          {mockHeights.map((h, i) => {
+          {barHeights.map((h, i) => {
             const progress = positionMs / (durationMs || 1);
-            const isActive = progress >= i / mockHeights.length;
+            const isActive = progress >= i / barHeights.length;
             return (
               <View 
                 key={i} 
@@ -224,12 +195,17 @@ interface MessageBubbleProps {
   message: Message;
   isMe: boolean;
   showTime: boolean;
+  onReply?: (message: Message) => void;
+  replyPreview?: string;
 }
 
-export const MessageBubble = React.memo(({ message, isMe, showTime }: MessageBubbleProps) => {
+export const MessageBubble = React.memo(({ message, isMe, showTime, onReply, replyPreview }: MessageBubbleProps) => {
   const dispatch = useDispatch();
+  const currentUserId = useSelector((state: RootState) => state.auth.user?.id ?? 'me');
   const [isViewerOpen, setIsViewerOpen] = useState(false);
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState(message.content);
 
   // Optimized Media Fetching via React Query (Global Caching)
   const mediaKeys = (message.mediaKeys && message.mediaKeys.length > 0) 
@@ -253,8 +229,8 @@ export const MessageBubble = React.memo(({ message, isMe, showTime }: MessageBub
       return Promise.all(promises);
     },
     enabled: mediaKeys.length > 0,
-    staleTime: 1000 * 60 * 30,
-    gcTime: 1000 * 60 * 60,
+    staleTime: 1000 * 60 * 10,
+    gcTime: 1000 * 60 * 14,
   });
 
   const isVoiceNote = mediaKeys.some(key => {
@@ -278,12 +254,10 @@ export const MessageBubble = React.memo(({ message, isMe, showTime }: MessageBub
   const handleDeleteForMe = async () => {
     setIsOptionsOpen(false);
     try {
-      // Locally remove for current user
-      dispatch(removeMessage({ matchId: message.matchId, messageId: message.id }));
-      // Tell backend to hide it for this user permanently
       await api.delete(`/chat/${message.matchId}/messages/${message.id}`, {
         data: { mode: 'me' }
       });
+      dispatch(removeMessage({ matchId: message.matchId, messageId: message.id }));
     } catch (err) {
       console.error('[MessageBubble] Error hiding message for me:', err);
     }
@@ -293,10 +267,10 @@ export const MessageBubble = React.memo(({ message, isMe, showTime }: MessageBub
     setIsOptionsOpen(false);
     try {
       if (!isMe) return; // Only sender can delete for everyone
-      dispatch(removeMessage({ matchId: message.matchId, messageId: message.id }));
       await api.delete(`/chat/${message.matchId}/messages/${message.id}`, {
         data: { mode: 'everyone' }
       });
+      dispatch(removeMessage({ matchId: message.matchId, messageId: message.id }));
     } catch (err) {
       console.error('[MessageBubble] Error deleting message for everyone:', err);
       Alert.alert("Error", "Could not delete message for everyone.");
@@ -334,10 +308,41 @@ export const MessageBubble = React.memo(({ message, isMe, showTime }: MessageBub
         { text: "Cancel", style: "cancel" },
         { 
           text: "Report", 
-          onPress: () => Alert.alert("Success", "Message reported successfully.") 
+          onPress: async () => {
+            try {
+              await api.post('/safety/report', {
+                reportedUserId: message.senderId,
+                matchId: message.matchId,
+                reason: 'inappropriate_message',
+                sourceType: 'message',
+                sourceId: message.id,
+              });
+              Alert.alert('Report sent', 'The safety team will review this message.');
+            } catch {
+              Alert.alert('Report failed', 'Try again when you have a network connection.');
+            }
+          }
         }
       ]
     );
+  };
+
+  const handleReaction = async (emoji: string) => {
+    setIsOptionsOpen(false);
+    dispatch(applyReaction({ matchId: message.matchId, messageId: message.id, userId: currentUserId, emoji }));
+    try { await api.put(`/chat/${message.matchId}/messages/${message.id}/reaction`, { emoji }); }
+    catch { dispatch(applyReaction({ matchId: message.matchId, messageId: message.id, userId: currentUserId, emoji: null })); }
+  };
+
+  const saveEdit = async () => {
+    const content = editText.trim();
+    if (!content) return;
+    try {
+      const response = await api.patch(`/chat/${message.matchId}/messages/${message.id}`, { content, expectedRevision: message.revision ?? 1 });
+      const value = response.data.data;
+      dispatch(applyMessageEdit({ matchId: message.matchId, messageId: message.id, content: value.content, revision: value.revision, editedAt: value.editedAt }));
+      setIsEditing(false);
+    } catch { Alert.alert('Edit failed', 'The message changed or the edit window expired.'); }
   };
 
   // Don't render bubble if it's completely empty (no text, no images)
@@ -365,6 +370,7 @@ export const MessageBubble = React.memo(({ message, isMe, showTime }: MessageBub
               sentAt={message.sentAt}
               messageId={message.id}
               readAt={message.readAt}
+              waveform={Array.isArray(message.metadata?.waveform) ? message.metadata.waveform as number[] : undefined}
             />
           ) : (
           <View style={[
@@ -511,6 +517,7 @@ export const MessageBubble = React.memo(({ message, isMe, showTime }: MessageBub
 
         {/* Render Text Content */}
         {/* Render Text Content */}
+        {message.replyToId && <View style={styles.quote}><Text style={styles.quoteText} numberOfLines={2}>{replyPreview ?? 'Original message is unavailable'}</Text></View>}
         {!!message.content && !isVoiceNote && (
           <View style={[
             styles.textContentWrapper, 
@@ -521,14 +528,15 @@ export const MessageBubble = React.memo(({ message, isMe, showTime }: MessageBub
             }
           ]}>
             <View style={{ position: 'relative', alignSelf: mediaKeys.length > 0 ? 'stretch' : 'flex-start' }}>
-              <Text style={[
+              {isEditing ? <View style={styles.editRow}><TextInput value={editText} onChangeText={setEditText} maxLength={2000} autoFocus style={styles.editInput} /><TouchableOpacity onPress={saveEdit}><Ionicons name="checkmark-circle" size={24} color={colors.primary} /></TouchableOpacity></View> : <Text style={[
                 styles.bubbleText, 
                 isMe ? styles.bubbleTextSent : styles.bubbleTextReceived, 
                 mediaKeys.length > 0 ? { marginTop: 0 } : {}, 
               ]}>
                 {message.content}
+                {message.editedAt ? <Text style={styles.edited}> edited</Text> : null}
                 <View style={{ width: 65, height: 18 }} />
-              </Text>
+              </Text>}
 
               {/* Message Meta for Text (Time & Status) */}
               <View style={[styles.bubbleMeta, { position: 'absolute', bottom: -2, right: -4 }]}>
@@ -559,6 +567,7 @@ export const MessageBubble = React.memo(({ message, isMe, showTime }: MessageBub
             </View>
           </View>
         )}
+        {message.reactions && Object.keys(message.reactions).length > 0 && <Text style={styles.reactionSummary}>{Object.values(message.reactions).join(' ')}</Text>}
 
         <ImageModal 
           isVisible={isViewerOpen} 
@@ -578,6 +587,9 @@ export const MessageBubble = React.memo(({ message, isMe, showTime }: MessageBub
           onDeleteForEveryone={handleDeleteForEveryone}
           onCopy={handleCopyText}
           onReport={handleReportMessage}
+          onReaction={handleReaction}
+          onEdit={() => { setIsOptionsOpen(false); setEditText(message.content); setIsEditing(true); }}
+          onReply={() => { setIsOptionsOpen(false); onReply?.(message); }}
           isMe={isMe}
         />
       </TouchableOpacity>
@@ -586,6 +598,10 @@ export const MessageBubble = React.memo(({ message, isMe, showTime }: MessageBub
 });
 
 const styles = StyleSheet.create({
+  reactionSummary: { alignSelf: 'flex-end', color: '#fff', backgroundColor: '#2a2227', borderRadius: 12, paddingHorizontal: 7, paddingVertical: 2, marginTop: -4, fontSize: 13 },
+  editRow: { flexDirection: 'row', alignItems: 'center', minWidth: 180 }, editInput: { flex: 1, color: '#fff', fontSize: 16, paddingVertical: 4 },
+  edited: { color: 'rgba(255,255,255,.5)', fontSize: 10 },
+  quote: { borderLeftWidth: 2, borderLeftColor: colors.primary, backgroundColor: 'rgba(255,255,255,.06)', paddingHorizontal: 8, paddingVertical: 5, margin: 4, borderRadius: 5 }, quoteText: { color: colors.text.secondary, fontSize: 12 },
   messageRow: {
     marginBottom: 4,
   },
@@ -719,7 +735,7 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   moreOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.4)',
     justifyContent: 'center',
     alignItems: 'center',

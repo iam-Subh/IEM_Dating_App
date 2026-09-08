@@ -874,11 +874,13 @@ export const EditProfileScreen = () => {
           const response = await fetch(Platform.OS === 'ios' ? file.uri.replace('file://', '') : file.uri);
           const blob = await response.blob();
 
-          await fetch(ticket.uploadUrl, {
+          const uploadResponse = await fetch(ticket.uploadUrl, {
             method: 'PUT',
             body: blob,
-            headers: { 'Content-Type': `image/${file.ext}` }
+            headers: { 'Content-Type': ticket.contentType }
           });
+          if (!uploadResponse.ok) throw new Error('Photo upload failed');
+          await api.post(`/upload/${ticket.assetId}/complete`);
 
           const placeholder = `UPLOAD_PENDING_${file.id}`;
           const finalIdx = photoUrls.indexOf(placeholder);
@@ -920,11 +922,13 @@ export const EditProfileScreen = () => {
       const response = await fetch(Platform.OS === 'ios' ? croppedUri.replace('file://', '') : croppedUri);
       const blob = await response.blob();
 
-      await fetch(uploadTicket.uploadUrl, {
+      const uploadResponse = await fetch(uploadTicket.uploadUrl, {
         method: 'PUT',
         body: blob,
-        headers: { 'Content-Type': `image/${ext}` }
+        headers: { 'Content-Type': uploadTicket.contentType }
       });
+      if (!uploadResponse.ok) throw new Error('Photo upload failed');
+      await api.post(`/upload/${uploadTicket.assetId}/complete`);
 
       const data: any = {
         name: profile.name,
@@ -1147,7 +1151,7 @@ export const EditProfileScreen = () => {
         <ListSection title="Campus Life">
           <ListRow icon="business-outline" label="College" value={profile.college || ''} onPress={() => navigation.navigate('EditCollege', { currentCollege: profile.college })} />
           <ListRow icon="book-outline" label="Department" value={profile.department || ''} onPress={() => navigation.navigate('EditDepartment', { currentDepartment: profile.department, currentYearOfStudy: profile.yearOfStudy })} />
-          <ListRow icon="business-outline" label="Batch" value={profile.year ? `${profile.year}` : ''} onPress={() => navigation.navigate('EditBatch', { currentBatch: profile.year })} />
+          <ListRow icon="business-outline" label="Graduation year" value={profile.graduationYear ? `${profile.graduationYear}` : ''} onPress={() => navigation.navigate('EditBatch', { currentBatch: profile.graduationYear })} />
           <ListRow 
             icon="school-outline" 
             label="Year of Study" 

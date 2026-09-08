@@ -28,6 +28,9 @@ interface MessageOptionsSheetProps {
   onDeleteForEveryone: () => void;
   onCopy: () => void;
   onReport: () => void;
+  onReaction: (emoji: string) => void;
+  onEdit: () => void;
+  onReply: () => void;
   isMe: boolean;
 }
 
@@ -38,6 +41,9 @@ export const MessageOptionsSheet = ({
   onDeleteForEveryone,
   onCopy,
   onReport,
+  onReaction,
+  onEdit,
+  onReply,
   isMe,
 }: MessageOptionsSheetProps) => {
   const translateY = useSharedValue(SCREEN_HEIGHT);
@@ -92,6 +98,17 @@ export const MessageOptionsSheet = ({
             <View style={styles.optionsList}>
               {!showDeleteConfirm ? (
                 <>
+                  <View style={styles.reactions}>
+                    {['❤️', '👍', '😂', '😮', '😢', '🔥'].map((emoji) => <TouchableOpacity key={emoji} onPress={() => onReaction(emoji)}><Text style={styles.reaction}>{emoji}</Text></TouchableOpacity>)}
+                  </View>
+                  <TouchableOpacity style={styles.optionItem} onPress={onReply}>
+                    <View style={[styles.iconContainer, { backgroundColor: 'rgba(255,255,255,0.1)' }]}><Ionicons name="return-up-back-outline" size={22} color="white" /></View>
+                    <Text style={styles.optionText}>Reply</Text>
+                  </TouchableOpacity>
+                  {isMe && <TouchableOpacity style={styles.optionItem} onPress={onEdit}>
+                    <View style={[styles.iconContainer, { backgroundColor: 'rgba(255,255,255,0.1)' }]}><Ionicons name="create-outline" size={22} color="white" /></View>
+                    <Text style={styles.optionText}>Edit message</Text>
+                  </TouchableOpacity>}
                   {/* Copy Option */}
                   <TouchableOpacity style={styles.optionItem} onPress={onCopy}>
                     <View style={[styles.iconContainer, { backgroundColor: 'rgba(255,255,255,0.1)' }]}>
@@ -101,12 +118,12 @@ export const MessageOptionsSheet = ({
                   </TouchableOpacity>
 
                   {/* Report Option */}
-                  <TouchableOpacity style={styles.optionItem} onPress={onReport}>
+                  {!isMe && <TouchableOpacity style={styles.optionItem} onPress={onReport}>
                     <View style={[styles.iconContainer, { backgroundColor: 'rgba(255,255,255,0.1)' }]}>
                       <Ionicons name="flag-outline" size={22} color="white" />
                     </View>
                     <Text style={styles.optionText}>Report Message</Text>
-                  </TouchableOpacity>
+                  </TouchableOpacity>}
 
                   {/* Initial Delete Trigger */}
                   <TouchableOpacity 
@@ -165,12 +182,14 @@ export const MessageOptionsSheet = ({
 };
 
 const styles = StyleSheet.create({
+  reactions: { flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 12 },
+  reaction: { fontSize: 25 },
   overlay: {
     flex: 1,
     justifyContent: 'flex-end',
   },
   backdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.4)',
   },
   sheetContainer: {

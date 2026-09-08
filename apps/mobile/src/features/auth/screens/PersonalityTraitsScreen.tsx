@@ -11,7 +11,7 @@ import {
   Platform,
   SafeAreaView,
 } from "react-native";
-import { useNavigation, useRoute } from "@react-navigation/native";
+import { useNavigation, useRoute, useFocusEffect } from "@react-navigation/native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useDispatch } from "react-redux";
 import { setCredentials, updateUser } from "../../../store/authSlice";
@@ -114,6 +114,15 @@ export const PersonalityTraitsScreen = () => {
   const [selections, setSelections] = useState<Record<string, string>>({});
   const [updating, setUpdating] = useState(false);
 
+  // This screen stays mounted in the navigation stack, so returning to it
+  // after a successful save would otherwise leave a stuck loading button
+  // that is also disabled. Clearing on focus covers every exit path.
+  useFocusEffect(
+    React.useCallback(() => {
+      setUpdating(false);
+    }, [])
+  );
+
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
 
@@ -167,7 +176,7 @@ export const PersonalityTraitsScreen = () => {
         seeking,
         department,
         degree,
-        year,
+        graduationYear,
         yearOfStudy
       } = route.params || {};
 
@@ -189,10 +198,9 @@ export const PersonalityTraitsScreen = () => {
       if (seeking !== undefined) finalData.seeking = seeking;
       if (department !== undefined) finalData.department = department;
       if (degree !== undefined) finalData.degree = degree;
-      if (year !== undefined) finalData.year = year;
+      if (graduationYear !== undefined) finalData.graduationYear = graduationYear;
       if (yearOfStudy !== undefined) finalData.yearOfStudy = yearOfStudy;
 
-      console.log("Saving personality traits:", JSON.stringify(finalData));
 
       const response = await api.put("/profile", finalData);
 
@@ -211,7 +219,7 @@ export const PersonalityTraitsScreen = () => {
         },
       });
     } catch (error) {
-      console.error("Failed to save personality traits:", error);
+      console.error("Failed to save personality traits");
       setUpdating(false);
       alert("Failed to save settings. Please try again.");
     }

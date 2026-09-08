@@ -25,14 +25,16 @@ import { CampusSelectionScreen } from '../features/auth/screens/CampusSelectionS
 import { SocialSelectionScreen } from '../features/auth/screens/SocialSelectionScreen';
 import { FaceVerificationInfoScreen } from '../features/auth/screens/FaceVerificationInfoScreen';
 import { PhotoUploadScreen } from '../features/auth/screens/PhotoUploadScreen';
+import { PasswordRecoveryScreen } from '../features/auth/screens/PasswordRecoveryScreen';
 
 const Stack = createNativeStackNavigator();
 
-export const AuthNavigator = () => {
+export const AuthNavigator = ({ initialRouteName = 'Welcome' }: { initialRouteName?: string }) => {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator initialRouteName={initialRouteName} screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Welcome" component={WelcomeScreen} />
       <Stack.Screen name="Login" component={LoginScreen} />
+      <Stack.Screen name="PasswordRecovery" component={PasswordRecoveryScreen} options={{ animation: 'slide_from_right' }} />
       <Stack.Screen
         name="OTPVerification"
         component={OTPScreen}

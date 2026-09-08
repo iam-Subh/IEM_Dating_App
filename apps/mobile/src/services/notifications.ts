@@ -1,5 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
+import { api } from './api';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -34,6 +36,15 @@ export async function registerForPushNotificationsAsync() {
     console.warn('Failed to get push token for push notification!');
     return undefined;
   }
-  token = (await Notifications.getExpoPushTokenAsync()).data;
+  const projectId = Constants.easConfig?.projectId ?? Constants.expoConfig?.extra?.eas?.projectId;
+  if (!projectId) return undefined;
+  token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
   return token;
+}
+
+export async function registerCurrentDeviceForPush() {
+  if (Platform.OS === 'web') return;
+  const token = await registerForPushNotificationsAsync();
+  if (!token) return;
+  await api.put('/notifications/devices', { token, platform: Platform.OS });
 }

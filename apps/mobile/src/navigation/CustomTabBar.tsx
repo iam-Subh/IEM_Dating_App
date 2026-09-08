@@ -11,6 +11,7 @@ const { width } = Dimensions.get('window');
 const LABELS: Record<string, string> = {
   Dashboard: 'EXPLORE',
   Search: 'SEARCH',
+  Matches: 'MATCHES',
   Chats: 'CHATS',
   Profile: 'PROFILE',
 };
@@ -52,8 +53,16 @@ export const CustomTabBar = ({ state, descriptors, navigation }: BottomTabBarPro
           if (isCenter) {
             return (
               <View key={route.key} style={styles.centerButtonContainer} pointerEvents="box-none">
-                <View style={styles.centerGlow} />
-                <TouchableOpacity onPress={onPress} style={styles.centerButton} activeOpacity={0.9}>
+                <View accessible={false} style={styles.centerGlow} />
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={LABELS[route.name] || route.name}
+                  accessibilityHint="Opens the Matches tab"
+                  accessibilityState={{ selected: isFocused }}
+                  onPress={onPress}
+                  style={styles.centerButton}
+                  activeOpacity={0.9}
+                >
                   <LinearGradient
                     colors={[colors.primary, '#FF1493']} 
                     style={styles.centerGradient}
@@ -75,7 +84,9 @@ export const CustomTabBar = ({ state, descriptors, navigation }: BottomTabBarPro
             <TouchableOpacity
               key={route.key}
               accessibilityRole="button"
-              accessibilityState={isFocused ? { selected: true } : {}}
+              accessibilityLabel={LABELS[route.name] || route.name}
+              accessibilityHint={`Opens the ${LABELS[route.name] || route.name} tab`}
+              accessibilityState={{ selected: isFocused }}
               onPress={onPress}
               style={styles.tabButton}
             >
@@ -119,7 +130,7 @@ const styles = StyleSheet.create({
     // Removed the background color so it doesn't block the native blur sampler
   },
   glassBorder: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     borderRadius: 35,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.1)', 

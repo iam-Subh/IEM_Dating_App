@@ -12,7 +12,7 @@ import {
   ScrollView,
   TextInput,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AnimatedBlurBackground } from '../../../components/ui/AnimatedBlurBackground';
 import { colors } from '../../../core/theme/colors';
@@ -23,6 +23,15 @@ export const SignUpScreen = () => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  // This screen stays mounted in the navigation stack, so returning to it
+  // after a successful save would otherwise leave a stuck loading button
+  // that is also disabled. Clearing on focus covers every exit path.
+  useFocusEffect(
+    React.useCallback(() => {
+      setLoading(false);
+    }, [])
+  );
+
   const [error, setError] = useState('');
   const domain = '@iem.edu.in';
   const navigation = useNavigation<any>();
@@ -75,11 +84,12 @@ export const SignUpScreen = () => {
     const fullEmail = `${emailPrefix.trim().toLowerCase()}${domain}`;
 
     try {
-      await api.post('/auth/send-otp', { email: fullEmail });
+      const response = await api.post('/auth/send-otp', { email: fullEmail });
       setLoading(false);
       navigation.navigate('SignUpOTP', {
         email: fullEmail,
         password,
+        challengeId: response.data.data.challengeId,
       });
     } catch (err: any) {
       setLoading(false);
