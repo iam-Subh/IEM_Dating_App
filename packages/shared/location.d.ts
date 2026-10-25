@@ -1,0 +1,12 @@
+export type Coords = { latitude: number; longitude: number };
+export const GRID_DEGREES: number;
+export const RADIUS_PRESETS_KM: readonly number[];
+export const EXPANDED_RADIUS_KM: number;
+export const LOCATION_STALE_DAYS: number;
+export const LOCATION_ERASE_DAYS: number;
+export const LOCATION_REFRESH_HOURS: number;
+export const MAX_SAVED_PLACES: number;
+export const MAX_MAP_PLACES: number;
+export function snapToGrid(coords: Coords): Coords;
+export function sameCell(a: Coords, b: Coords): boolean;
+export function toRadiusPreset(km: unknown): number;

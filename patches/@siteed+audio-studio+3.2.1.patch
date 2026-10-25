@@ -1,3 +1,428 @@
+diff --git a/node_modules/@siteed/audio-studio/android/src/main/java/net/siteed/audiostudio/AudioRecorderManager.kt b/node_modules/@siteed/audio-studio/android/src/main/java/net/siteed/audiostudio/AudioRecorderManager.kt
+index 7d1e913..9501079 100644
+--- a/node_modules/@siteed/audio-studio/android/src/main/java/net/siteed/audiostudio/AudioRecorderManager.kt
++++ b/node_modules/@siteed/audio-studio/android/src/main/java/net/siteed/audiostudio/AudioRecorderManager.kt
+@@ -547,123 +547,126 @@ class AudioRecorderManager(
+ 
+     @RequiresApi(Build.VERSION_CODES.R)
+     fun startRecording(options: Map<String, Any?>, promise: Promise) {
+-        try {
+-            // Check if already recording
+-            if (_isRecording.get() && !isPaused.get()) {
+-                promise.reject("ALREADY_RECORDING", "Recording is already in progress", null)
+-                return
+-            }
++        synchronized(audioRecordLock) {
++            try {
++                // Check if already recording
++                if (_isRecording.get() && !isPaused.get()) {
++                    promise.reject("ALREADY_RECORDING", "Recording is already in progress", null)
++                    return
++                }
+                 
+-            // If already prepared, we can skip initialization
+-            if (!isPrepared) {
+-                LogUtils.d(CLASS_NAME, "Not prepared, preparing recording first")
++                // If already prepared, we can skip initialization
++                if (!isPrepared) {
++                    LogUtils.d(CLASS_NAME, "Not prepared, preparing recording first")
+                     
+-                // Initialize phone state listener only if enabled
+-                if (enablePhoneStateHandling) {
+-                    initializePhoneStateListener()
+-                }
++                    // Initialize phone state listener only if enabled
++                    if (enablePhoneStateHandling) {
++                        initializePhoneStateListener()
++                    }
+ 
+-                LogUtils.d(CLASS_NAME, "Starting recording with options: $options")
++                    LogUtils.d(CLASS_NAME, "Starting recording with options: $options")
+ 
+-                // Check permissions
+-                if (!checkPermissions(options, promise)) return
++                    // Check permissions
++                    if (!checkPermissions(options, promise)) return
+ 
+-                // Parse recording configuration FIRST
+-                val configResult = RecordingConfig.fromMap(options)
+-                if (configResult.isFailure) {
+-                    promise.reject(
+-                        "INVALID_CONFIG",
+-                        configResult.exceptionOrNull()?.message ?: "Invalid configuration",
+-                        configResult.exceptionOrNull()
+-                    )
+-                    return
+-                }
++                    // Parse recording configuration FIRST
++                    val configResult = RecordingConfig.fromMap(options)
++                    if (configResult.isFailure) {
++                        promise.reject(
++                            "INVALID_CONFIG",
++                            configResult.exceptionOrNull()?.message ?: "Invalid configuration",
++                            configResult.exceptionOrNull()
++                        )
++                        return
++                    }
+ 
+-                val (tempRecordingConfig, audioFormatInfo) = configResult.getOrNull()!!
++                    val (tempRecordingConfig, audioFormatInfo) = configResult.getOrNull()!!
+                     
+-                recordingConfig = tempRecordingConfig
++                    recordingConfig = tempRecordingConfig
+                     
+-                // Request audio focus AFTER config is parsed so strategy is correct
+-                if (!requestAudioFocus()) {
+-                    promise.reject("AUDIO_FOCUS_ERROR", "Failed to obtain audio focus", null)
+-                    return
+-                }
++                    // Request audio focus AFTER config is parsed so strategy is correct
++                    if (!requestAudioFocus()) {
++                        promise.reject("AUDIO_FOCUS_ERROR", "Failed to obtain audio focus", null)
++                        return
++                    }
+                     
+-                // Store device-related settings
+-                selectedDeviceId = recordingConfig.deviceId
+-                deviceDisconnectionBehavior = recordingConfig.deviceDisconnectionBehavior ?: "pause"
++                    // Store device-related settings
++                    selectedDeviceId = recordingConfig.deviceId
++                    deviceDisconnectionBehavior = recordingConfig.deviceDisconnectionBehavior ?: "pause"
+                     
+-                audioFormat = audioFormatInfo.format
+-                mimeType = audioFormatInfo.mimeType
++                    audioFormat = audioFormatInfo.format
++                    mimeType = audioFormatInfo.mimeType
+ 
+-                if (!initializeAudioFormat(promise)) return
++                    if (!initializeAudioFormat(promise)) return
+ 
+-                if (!initializeBufferSize(promise)) return
++                    if (!initializeBufferSize(promise)) return
+ 
+-                if (!initializeAudioRecord(promise)) return
++                    if (!initializeAudioRecord(promise)) return
+ 
+-                if (recordingConfig.output.compressed.enabled && !initializeCompressedRecorder(
+-                    if (recordingConfig.output.compressed.format == "aac") "aac" else "opus",
+-                    promise
+-                )) return
++                    if (recordingConfig.output.compressed.enabled && !initializeCompressedRecorder(
++                        if (recordingConfig.output.compressed.format == "aac") "aac" else "opus",
++                        promise
++                    )) return
+ 
+-                if (!initializeRecordingResources(audioFormatInfo.fileExtension, promise)) return
+-            } else {
+-                LogUtils.d(CLASS_NAME, "Using prepared recording state")
++                    if (!initializeRecordingResources(audioFormatInfo.fileExtension, promise)) return
++                } else {
++                    LogUtils.d(CLASS_NAME, "Using prepared recording state")
++                    
++                    // Even when prepared, update device settings from the new options
++                    val configResult = RecordingConfig.fromMap(options)
++                    if (configResult.isSuccess) {
++                        val (tempRecordingConfig, _) = configResult.getOrNull()!!
++                        // Update device-related settings
++                        selectedDeviceId = tempRecordingConfig.deviceId ?: selectedDeviceId
++                        deviceDisconnectionBehavior = tempRecordingConfig.deviceDisconnectionBehavior 
++                            ?: deviceDisconnectionBehavior
++                            ?: "pause"
++                    }
+                     
+-                // Even when prepared, update device settings from the new options
+-                val configResult = RecordingConfig.fromMap(options)
+-                if (configResult.isSuccess) {
+-                    val (tempRecordingConfig, _) = configResult.getOrNull()!!
+-                    // Update device-related settings
+-                    selectedDeviceId = tempRecordingConfig.deviceId ?: selectedDeviceId
+-                    deviceDisconnectionBehavior = tempRecordingConfig.deviceDisconnectionBehavior 
+-                        ?: deviceDisconnectionBehavior
+-                        ?: "pause"
++                    // Request audio focus with current config
++                    if (!requestAudioFocus()) {
++                        promise.reject("AUDIO_FOCUS_ERROR", "Failed to obtain audio focus", null)
++                        return
++                    }
+                 }
+ 
+-                // Request audio focus with current config
+-                if (!requestAudioFocus()) {
+-                    promise.reject("AUDIO_FOCUS_ERROR", "Failed to obtain audio focus", null)
++                if (!startRecordingProcess(promise)) return
++
++                // Start compressed recording if enabled
++                try {
++                    compressedRecorder?.start()
++                } catch (e: Exception) {
++                    LogUtils.e(CLASS_NAME, "Failed to start compressed recording", e)
++                    cleanup()
++                    promise.reject("COMPRESSED_START_FAILED", "Failed to start compressed recording", e)
+                     return
+                 }
+-            }
+ 
+-            if (!startRecordingProcess(promise)) return
++                // Return success result with both file URIs
++                val result = bundleOf(
++                    "fileUri" to audioFile?.toURI().toString(),
++                    "channels" to recordingConfig.channels,
++                    "bitDepth" to AudioFormatUtils.getBitDepth(recordingConfig.encoding),
++                    "sampleRate" to recordingConfig.sampleRate,
++                    "mimeType" to mimeType,
++                    "compression" to if (compressedFile != null) bundleOf(
++                        "mimeType" to if (recordingConfig.output.compressed.format == "aac") "audio/aac" else "audio/opus",
++                        "bitrate" to recordingConfig.output.compressed.bitrate,
++                        "format" to recordingConfig.output.compressed.format,
++                        "size" to 0,
++                        "compressedFileUri" to compressedFile?.toURI().toString()
++                    ) else null
++                )
++                startMaxDurationTimer()
++                promise.resolve(result)
+ 
+-            // Start compressed recording if enabled
+-            try {
+-                compressedRecorder?.start()
+             } catch (e: Exception) {
+-                LogUtils.e(CLASS_NAME, "Failed to start compressed recording", e)
+-                cleanup()
+-                promise.reject("COMPRESSED_START_FAILED", "Failed to start compressed recording", e)
+-                return
++                releaseAudioFocus()
++                unregisterPhoneStateListener()
++                promise.reject("UNEXPECTED_ERROR", "Unexpected error: ${e.message}", e)
+             }
+-
+-            // Return success result with both file URIs
+-            val result = bundleOf(
+-                "fileUri" to audioFile?.toURI().toString(),
+-                "channels" to recordingConfig.channels,
+-                "bitDepth" to AudioFormatUtils.getBitDepth(recordingConfig.encoding),
+-                "sampleRate" to recordingConfig.sampleRate,
+-                "mimeType" to mimeType,
+-                "compression" to if (compressedFile != null) bundleOf(
+-                    "mimeType" to if (recordingConfig.output.compressed.format == "aac") "audio/aac" else "audio/opus",
+-                    "bitrate" to recordingConfig.output.compressed.bitrate,
+-                    "format" to recordingConfig.output.compressed.format,
+-                    "size" to 0,
+-                    "compressedFileUri" to compressedFile?.toURI().toString()
+-                ) else null
+-            )
+-            startMaxDurationTimer()
+-            promise.resolve(result)
+-
+-        } catch (e: Exception) {
+-            releaseAudioFocus()
+-            unregisterPhoneStateListener()
+-            promise.reject("UNEXPECTED_ERROR", "Unexpected error: ${e.message}", e)
+         }
++
+     }
+ 
+     private fun isAudioFormatSupported(sampleRate: Int, channels: Int, format: Int): Boolean {
+@@ -687,19 +690,13 @@ class AudioRecorderManager(
+             bufferSize
+         )
+ 
+-        val isSupported = audioRecord.state == AudioRecord.STATE_INITIALIZED
+-        if (isSupported) {
+-            val testBuffer = ByteArray(bufferSize)
+-            audioRecord.startRecording()
+-            val testRead = audioRecord.read(testBuffer, 0, bufferSize)
+-            audioRecord.stop()
+-            if (testRead < 0) {
+-                return false
+-            }
++        // Initialization validates this format without opening a capture stream.
++        // Reading a probe buffer added latency and captured audio during prepare.
++        return try {
++            audioRecord.state == AudioRecord.STATE_INITIALIZED
++        } finally {
++            audioRecord.release()
+         }
+-
+-        audioRecord.release()
+-        return isSupported
+     }
+ 
+     private fun getMaxDurationActiveMs(now: Long = SystemClock.elapsedRealtime()): Long {
+@@ -1040,7 +1037,6 @@ class AudioRecorderManager(
+                 LogUtils.d(CLASS_NAME, "Skipping primary file creation - primary output is disabled")
+             }
+ 
+-            acquireWakeLock()
+             audioProcessor.resetCumulativeAmplitudeRange()
+             return true
+ 
+@@ -1084,6 +1080,7 @@ class AudioRecorderManager(
+             """.trimIndent())
+ 
+             audioRecord?.startRecording()
++            acquireWakeLock()
+             isPaused.set(false)
+             pausedBySystemInterruption.set(false)
+             isFirstChunk = true
+@@ -2250,70 +2247,87 @@ class AudioRecorderManager(
+      * This reuses the existing validation and setup functions for compatibility.
+      */
+     fun prepareRecording(options: Map<String, Any?>): Boolean {
+-        if (_isRecording.get()) {
+-            LogUtils.d(CLASS_NAME, "Cannot prepare recording - already recording")
+-            return false
+-        }
+-        
+-        if (isPrepared) {
+-            LogUtils.d(CLASS_NAME, "Already prepared")
+-            return true
+-        }
++        synchronized(audioRecordLock) {
++            if (_isRecording.get()) {
++                LogUtils.d(CLASS_NAME, "Cannot prepare recording - already recording")
++                return false
++            }
+             
+-        try {
+-            // Initialize phone state listener only if enabled
+-            if (enablePhoneStateHandling) {
+-                initializePhoneStateListener()
++            if (isPrepared) {
++                LogUtils.d(CLASS_NAME, "Already prepared")
++                return true
+             }
+             
+-            // Check permissions - create a dummy promise to avoid rejections
+-            val dummyPromise = object : Promise {
+-                override fun resolve(value: Any?) {}
+-                override fun reject(code: String?, message: String?, cause: Throwable?) {
+-                    LogUtils.e(CLASS_NAME, "Preparation error: $code - $message", cause)
++            try {
++                // Initialize phone state listener only if enabled
++                if (enablePhoneStateHandling) {
++                    initializePhoneStateListener()
++                }
++
++                // Check permissions - create a dummy promise to avoid rejections
++                val dummyPromise = object : Promise {
++                    override fun resolve(value: Any?) {}
++                    override fun reject(code: String?, message: String?, cause: Throwable?) {
++                        LogUtils.e(CLASS_NAME, "Preparation error: $code - $message", cause)
++                    }
+                 }
+-            }
+                 
+-            if (!checkPermissions(options, dummyPromise)) return false
++                if (!checkPermissions(options, dummyPromise)) return false
+ 
+-            // Parse recording configuration - reuse existing code
+-            val configResult = RecordingConfig.fromMap(options)
+-            if (configResult.isFailure) {
+-                LogUtils.e(CLASS_NAME, "Invalid configuration: ${configResult.exceptionOrNull()?.message}")
+-                return false
+-            }
++                // Parse recording configuration - reuse existing code
++                val configResult = RecordingConfig.fromMap(options)
++                if (configResult.isFailure) {
++                    LogUtils.e(CLASS_NAME, "Invalid configuration: ${configResult.exceptionOrNull()?.message}")
++                    return false
++                }
+ 
+-            val (tempRecordingConfig, audioFormatInfo) = configResult.getOrNull()!!
+-            recordingConfig = tempRecordingConfig
++                val (tempRecordingConfig, audioFormatInfo) = configResult.getOrNull()!!
++                recordingConfig = tempRecordingConfig
+                 
+-            // Store device-related settings
+-            selectedDeviceId = recordingConfig.deviceId
+-            deviceDisconnectionBehavior = recordingConfig.deviceDisconnectionBehavior ?: "pause"
++                // Store device-related settings
++                selectedDeviceId = recordingConfig.deviceId
++                deviceDisconnectionBehavior = recordingConfig.deviceDisconnectionBehavior ?: "pause"
++                
++                audioFormat = audioFormatInfo.format
++                mimeType = audioFormatInfo.mimeType
+ 
+-            audioFormat = audioFormatInfo.format
+-            mimeType = audioFormatInfo.mimeType
++                // Use all the existing validation functions with our dummy promise
++                if (!initializeAudioFormat(dummyPromise)) return false
++                if (!initializeBufferSize(dummyPromise)) return false
++                if (!initializeAudioRecord(dummyPromise)) return false
+                 
+-            // Use all the existing validation functions with our dummy promise
+-            if (!initializeAudioFormat(dummyPromise)) return false
+-            if (!initializeBufferSize(dummyPromise)) return false
+-            if (!initializeAudioRecord(dummyPromise)) return false
++                if (recordingConfig.output.compressed.enabled && !initializeCompressedRecorder(
++                    if (recordingConfig.output.compressed.format == "aac") "aac" else "opus",
++                    dummyPromise
++                )) return false
+ 
+-            if (recordingConfig.output.compressed.enabled && !initializeCompressedRecorder(
+-                if (recordingConfig.output.compressed.format == "aac") "aac" else "opus",
+-                dummyPromise
+-            )) return false
++                if (!initializeRecordingResources(audioFormatInfo.fileExtension, dummyPromise)) return false
+                 
+-            if (!initializeRecordingResources(audioFormatInfo.fileExtension, dummyPromise)) return false
++                // Everything is ready, mark as prepared
++                isPrepared = true
++                LogUtils.d(CLASS_NAME, "Recording prepared successfully")
++                return true
++            } catch (e: Exception) {
++                LogUtils.e(CLASS_NAME, "Error during preparation: ${e.message}", e)
++                cleanup()
++                isPrepared = false
++                return false
++            }
++        }
++    }
+ 
+-            // Everything is ready, mark as prepared
+-            isPrepared = true
+-            LogUtils.d(CLASS_NAME, "Recording prepared successfully")
+-            return true
+-        } catch (e: Exception) {
+-            LogUtils.e(CLASS_NAME, "Error during preparation: ${e.message}", e)
++    fun releasePreparedRecording() {
++        synchronized(audioRecordLock) {
++            if (_isRecording.get() || !isPrepared) return
++            val emptyPrimary = audioFile
++            val emptyCompressed = compressedFile
++            compressedRecorder?.release()
++            compressedRecorder = null
+             cleanup()
+-            isPrepared = false
+-            return false
++            emptyPrimary?.delete()
++            emptyCompressed?.delete()
++            audioFile = null
++            compressedFile = null
+         }
+     }
+ }
+diff --git a/node_modules/@siteed/audio-studio/android/src/main/java/net/siteed/audiostudio/AudioStudioModule.kt b/node_modules/@siteed/audio-studio/android/src/main/java/net/siteed/audiostudio/AudioStudioModule.kt
+index c28099f..cc1e8c8 100644
+--- a/node_modules/@siteed/audio-studio/android/src/main/java/net/siteed/audiostudio/AudioStudioModule.kt
++++ b/node_modules/@siteed/audio-studio/android/src/main/java/net/siteed/audiostudio/AudioStudioModule.kt
+@@ -217,6 +217,17 @@ class AudioStudioModule : Module(), EventSender, AudioStreamDecoderDelegate {
+             }
+         }
+ 
++        AsyncFunction("releasePreparedRecording") { promise: Promise ->
++            coroutineScope.launch(Dispatchers.IO) {
++                try {
++                    audioRecorderManager.releasePreparedRecording()
++                    promise.resolve(null)
++                } catch (e: Exception) {
++                    promise.reject("RELEASE_ERROR", "Could not release prepared recorder", e)
++                }
++            }
++        }
++
+         AsyncFunction("startRecording") { options: Map<String, Any?>, promise: Promise ->
+             // If notifications are requested but permission not in manifest, modify options
+             if (options["showNotification"] as? Boolean == true && !enableNotificationHandling) {
 diff --git a/node_modules/@siteed/audio-studio/plugin/build/index.js b/node_modules/@siteed/audio-studio/plugin/build/index.js
 index 5b0864d..735d4d3 100644
 --- a/node_modules/@siteed/audio-studio/plugin/build/index.js

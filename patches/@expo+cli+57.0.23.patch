@@ -1,0 +1,17 @@
+diff --git a/node_modules/@expo/cli/build/src/start/platforms/android/adb.js b/node_modules/@expo/cli/build/src/start/platforms/android/adb.js
+--- a/node_modules/@expo/cli/build/src/start/platforms/android/adb.js
++++ b/node_modules/@expo/cli/build/src/start/platforms/android/adb.js
+@@ -237,7 +237,12 @@
+         // unauthorized: ['FA8251A00719', 'unauthorized', 'usb:338690048X', 'transport_id:5']
+         // authorized: ['FA8251A00719', 'device', 'usb:336592896X', 'product:walleye', 'model:Pixel_2', 'device:walleye', 'transport_id:4']
+         // emulator: ['emulator-5554', 'offline', 'transport_id:1']
+-        const props = line.split(' ').filter(Boolean);
++        // Wireless mDNS serials can contain spaces, e.g. "adb-phone (2)._adb-tls-connect._tcp".
++        // Split at the device state, preserving the complete serial passed to adb -s.
++        const deviceLine = line.match(/^(.+?)\s+(device|offline|unauthorized|bootloader|recovery|sideload|rescue|no permissions)(?=\s|$)(.*)$/);
++        const props = deviceLine
++            ? [deviceLine[1], deviceLine[2], ...deviceLine[3].trim().split(/\s+/).filter(Boolean)]
++            : line.split(/\s+/).filter(Boolean);
+         const type = line.includes('emulator') ? 'emulator' : 'device';
+         let connectionType;
+         if (type === 'device' && line.includes('usb:')) {

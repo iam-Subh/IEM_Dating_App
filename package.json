@@ -8,7 +8,9 @@
     "packages/*"
   ],
   "scripts": {
+    "chat:lab": "node scripts/build-chat-lab.cjs && node scripts/serve-chat-lab.cjs",
     "postinstall": "patch-package",
+    "connect": "npm run connect --workspace=mobile",
     "dev:api": "npm run dev --workspace=@iem-dating/api",
     "dev:mobile": "npm run start --workspace=mobile",
     "typecheck:mobile": "npm run typecheck --workspace=mobile",

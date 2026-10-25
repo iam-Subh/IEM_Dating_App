@@ -1,0 +1,68 @@
+diff --git a/node_modules/@shopify/flash-list/dist/recyclerview/ViewHolderCollection.js b/node_modules/@shopify/flash-list/dist/recyclerview/ViewHolderCollection.js
+index 8e3db51..b27c552 100644
+--- a/node_modules/@shopify/flash-list/dist/recyclerview/ViewHolderCollection.js
++++ b/node_modules/@shopify/flash-list/dist/recyclerview/ViewHolderCollection.js
+@@ -72,7 +72,7 @@ export const ViewHolderCollection = (props) => {
+     //     return `${index} => ${reactKey}`;
+     //   })
+     // );
+-    return (React.createElement(CompatView, { style: hasData && containerStyle }, containerLayout &&
++    return (React.createElement(CompatView, { collapsable: false, style: hasData && containerStyle }, containerLayout &&
+         hasData &&
+         Array.from(renderStack.entries(), ([reactKey, { index }]) => {
+             const item = data[index];
+diff --git a/node_modules/@shopify/flash-list/dist/recyclerview/hooks/useRecyclerViewController.js b/node_modules/@shopify/flash-list/dist/recyclerview/hooks/useRecyclerViewController.js
+index 08724d1..67958b2 100644
+--- a/node_modules/@shopify/flash-list/dist/recyclerview/hooks/useRecyclerViewController.js
++++ b/node_modules/@shopify/flash-list/dist/recyclerview/hooks/useRecyclerViewController.js
+@@ -186,6 +186,15 @@ export function useRecyclerViewController(recyclerViewManager, ref, scrollViewRe
+                     // Calculate the final offset including first item offset if needed
+                     const adjustedOffset = offset +
+                         (skipFirstItemOffset ? 0 : recyclerViewManager.firstItemOffset);
++                    // A programmatic scroll carries no velocity of its own. Without
++                    // resetting the history here, the next engaged window is
++                    // projected with whatever the last fling left behind and lands
++                    // past the target, leaving the rows at the destination
++                    // unrendered until a later scroll event corrects it.
++                    // scrollToIndex already does this; scrollToOffset did not.
++                    recyclerViewManager.setScrollDirection(adjustedOffset > recyclerViewManager.getAbsoluteLastScrollOffset()
++                        ? "forward"
++                        : "backward");
+                     const scrollTo = horizontal
+                         ? { x: adjustedOffset, y: 0 }
+                         : { x: 0, y: adjustedOffset };
+diff --git a/node_modules/@shopify/flash-list/src/recyclerview/ViewHolderCollection.tsx b/node_modules/@shopify/flash-list/src/recyclerview/ViewHolderCollection.tsx
+index a652beb..749ef24 100644
+--- a/node_modules/@shopify/flash-list/src/recyclerview/ViewHolderCollection.tsx
++++ b/node_modules/@shopify/flash-list/src/recyclerview/ViewHolderCollection.tsx
+@@ -172,7 +172,7 @@ export const ViewHolderCollection = <TItem,>(
+   // );
+ 
+   return (
+-    <CompatView style={hasData && containerStyle}>
++    <CompatView collapsable={false} style={hasData && containerStyle}>
+       {containerLayout &&
+         hasData &&
+         Array.from(renderStack.entries(), ([reactKey, { index }]) => {
+diff --git a/node_modules/@shopify/flash-list/src/recyclerview/hooks/useRecyclerViewController.tsx b/node_modules/@shopify/flash-list/src/recyclerview/hooks/useRecyclerViewController.tsx
+index 3689830..95ee7ad 100644
+--- a/node_modules/@shopify/flash-list/src/recyclerview/hooks/useRecyclerViewController.tsx
++++ b/node_modules/@shopify/flash-list/src/recyclerview/hooks/useRecyclerViewController.tsx
+@@ -256,6 +256,17 @@ export function useRecyclerViewController<T>(
+           const adjustedOffset =
+             offset +
+             (skipFirstItemOffset ? 0 : recyclerViewManager.firstItemOffset);
++          // A programmatic scroll carries no velocity of its own. Without
++          // resetting the history here, the next engaged window is
++          // projected with whatever the last fling left behind and lands
++          // past the target, leaving the rows at the destination
++          // unrendered until a later scroll event corrects it.
++          // scrollToIndex already does this; scrollToOffset did not.
++          recyclerViewManager.setScrollDirection(
++            adjustedOffset > recyclerViewManager.getAbsoluteLastScrollOffset()
++              ? "forward"
++              : "backward"
++          );
+           const scrollTo = horizontal
+             ? { x: adjustedOffset, y: 0 }
+             : { x: 0, y: adjustedOffset };

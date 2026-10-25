@@ -42,12 +42,27 @@ export interface DiscoveryCard {
     personality: Record<string, string>;
   };
   seeking: string | null;
+  /** College verified: unlocks college-only features and "Verified students only". */
   isVerified: boolean;
+  /** The blue badge: college verified and face check passed, both current. */
+  blueBadge?: boolean;
+  /** Passed the real-person check and every photo still matches; badge on the expanded profile only. */
+  realPerson?: boolean;
   primaryPhoto: string | null;
   photos: string[];
   video: string | null;
-  videoPreview: string | null;
+  /** Still frame shown until the video's first frame renders. */
+  videoPoster: string | null;
+  /** A distance band, only for a viewer in distance mode, never finer than "Under 5 km". */
   distanceLabel: string | null;
+  /** "UEM Kolkata": set only when the person is from another institution than the viewer. */
+  institutionLabel: string | null;
+  /** "Jaipur": set only when that institution is in another city. */
+  cityLabel: string | null;
+  /** "Visiting · UEM Jaipur": a distance-mode person far from their own campus. */
+  visitingLabel: string | null;
+  /** "now" (Active now) or "recent" (Recently active, within a day); null when either side keeps theirs private. */
+  activity?: 'now' | 'recent' | null;
   matchPercentage: number | null;
   compatibilityScore: number | null;
   matchFactors: CompatibilityFactor[];
