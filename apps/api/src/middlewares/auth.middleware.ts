@@ -2,7 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import { ApiResponse } from '../utils/ApiResponse';
 import { prisma } from '../utils/prisma';
 import { redisClient } from '../utils/redis';
-import { AccessSessionService } from '../services/access-session.service';
+import { AccessSessionService, AuthRejected } from '../services/access-session.service';
+import { touchSession } from '../services/session-device.service';
 
 /**
  * Debounced update of user's lastActiveAt.
@@ -22,6 +23,11 @@ async function updateLastActive(userId: string): Promise<void> {
       where: { id: userId },
       data: { lastActiveAt: new Date() },
     }).catch(() => {}); // Silently ignore errors
+    // The hour they use the app, for timed pushes (NOTIFICATIONS_PLAN.md 5).
+    // Lazily: the push services import much of the app.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { PushEngagementService } = require('../services/push-engagement.service') as typeof import('../services/push-engagement.service');
+    PushEngagementService.touch(userId).catch(() => {});
   } catch {
     // Redis not connected — skip tracking
   }
@@ -49,11 +55,19 @@ export const protect = async (req: Request, res: Response, next: NextFunction) =
     const decoded = await AccessSessionService.authenticate(token);
     (req as any).user = decoded;
 
-    // Track activity (async, non-blocking)
+    // Track activity (async, non-blocking): the account, and this device's session.
     updateLastActive(decoded.sub);
+    if (decoded.jti) touchSession(decoded.jti, req);
 
     next();
   } catch (error) {
-    return res.status(401).json(ApiResponse.error('Not authorized, token validation failed'));
+    if (error instanceof AuthRejected) {
+      return res.status(401).json(ApiResponse.error('Not authorized, token validation failed'));
+    }
+    // The server could not check the sign-in (the database restarting, a
+    // dropped connection). A 401 here made the app renew its session for
+    // nothing - in a loop - and could even sign people out.
+    console.warn(`[AUTH] Sign-in check failed on the server: ${(error as Error).message}`);
+    return res.status(503).json({ success: false, message: 'The server is busy. Try again in a moment.', code: 'AUTH_CHECK_UNAVAILABLE' });
   }
 };

@@ -10,7 +10,8 @@ export const globalErrorHandler = (
   next: NextFunction
 ) => {
   if (err instanceof HttpError) {
-    res.status(err.status).json({ success: false, message: err.message, code: err.code });
+    res.locals.errorCode = err.code;
+    res.status(err.status).json({ success: false, message: err.message, code: err.code, ...(err.details ? { details: err.details } : {}) });
     return;
   }
   logger.error(`Error processing ${req.method} ${req.path}: ${err.message}`, { stack: err.stack });

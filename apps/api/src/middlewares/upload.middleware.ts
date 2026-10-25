@@ -4,6 +4,7 @@ import multerS3 from 'multer-s3';
 import { Request } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
+import { createS3Client, publicMediaBucket } from '../config/storage';
 
 const CDN_DOMAIN = process.env.CDN_URL || '';
 
@@ -35,13 +36,8 @@ export const transformToCdnUrl = (s3Url: string): string => {
   }
 };
 
-export const s3Client = new S3Client({
-  region: process.env.AWS_REGION || 'us-east-1',
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-  },
-});
+/** AWS S3 or Cloudflare R2, by STORAGE_PROVIDER (config/storage.ts). */
+export const s3Client: S3Client = createS3Client();
 
 const generateFileName = (req: any, file: Express.Multer.File): string => {
   const ext = path.extname(file.originalname);
@@ -52,7 +48,7 @@ const generateFileName = (req: any, file: Express.Multer.File): string => {
 export const uploadMedia = multer({
   storage: multerS3({
     s3: s3Client,
-    bucket: process.env.AWS_S3_BUCKET_NAME || '',
+    bucket: publicMediaBucket() || '',
     key: function (req, file, cb) {
       cb(null, generateFileName(req, file));
     },
