@@ -19,19 +19,50 @@
       }
     },
     "android": {
+      "allowBackup": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#32002f"
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.iemconnect.app",
+      "googleServicesFile": "./google-services.json",
       "versionCode": 1,
-      "softwareKeyboardLayoutMode": "resize"
+      "softwareKeyboardLayoutMode": "resize",
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.CAMERA"
+      ],
+      "playStoreUrl": "https://play.google.com/store/apps/details?id=com.iemconnect.app"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26,
+            "extraMavenRepos": [
+              "https://maven.mappls.com/repository/mappls/"
+            ]
+          }
+        }
+      ],
+      "./plugins/withMapplsConfig",
+      "./plugins/withAllowBackupOverride",
+      "./plugins/withShareTargets",
       "expo-font",
       [
         "expo-splash-screen",
@@ -61,13 +92,36 @@
         }
       ],
       [
+        "expo-media-library",
+        {
+          "photosPermission": "Use your photo library to select chat photos and videos.",
+          "granularPermissions": [
+            "photo",
+            "video"
+          ]
+        }
+      ],
+      [
         "expo-camera",
         {
           "cameraPermission": "Use the camera to take profile photos and Story media.",
           "microphonePermission": "Use the microphone when you record video media."
         }
       ],
-      "expo-notifications"
-    ]
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#FF5A5F"
+        }
+      ],
+      "react-native-liquid-glassmorphism"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "2ac821db-5cc5-40e8-91a1-d693b3f1410d"
+      }
+    },
+    "owner": "your_subh"
   }
 }

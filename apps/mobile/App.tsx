@@ -9,6 +9,8 @@ import { PlayfairDisplay_400Regular_Italic } from '@expo-google-fonts/playfair-d
 import { Inter_500Medium, Inter_700Bold } from '@expo-google-fonts/inter';
 import { Syne_800ExtraBold } from '@expo-google-fonts/syne';
 import { DMSans_400Regular, DMSans_500Medium, DMSans_700Bold } from '@expo-google-fonts/dm-sans';
+import { CormorantGaramond_600SemiBold } from '@expo-google-fonts/cormorant-garamond';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -17,6 +19,9 @@ const queryClient = new QueryClient();
 
 export default function App() {
   const [fontsLoaded] = useFonts({
+    // Load these with the text fonts so the first screen has no missing icon glyphs.
+    ...Ionicons.font,
+    ...MaterialIcons.font,
     PlayfairDisplay_400Regular_Italic,
     Inter_500Medium,
     Inter_700Bold,
@@ -24,6 +29,7 @@ export default function App() {
     DMSans_400Regular,
     DMSans_500Medium,
     DMSans_700Bold,
+    CormorantGaramond_600SemiBold,
   });
 
   if (!fontsLoaded) {
