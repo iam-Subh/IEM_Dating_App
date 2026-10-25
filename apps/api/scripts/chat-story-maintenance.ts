@@ -1,12 +1,13 @@
 import { DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { prisma } from '../src/utils/prisma';
 import { s3Client } from '../src/middlewares/upload.middleware';
+import { privateMediaBucket } from '../src/config/storage';
 
 async function main() {
   const now = new Date();
   const eventCutoff = new Date(Date.now() - 30 * 24 * 60 * 60_000);
   const assetCutoff = new Date(Date.now() - 24 * 60 * 60_000);
-  const bucket = process.env.AWS_PRIVATE_MEDIA_BUCKET;
+  const bucket = privateMediaBucket();
 
   const expiredStories = await prisma.story.updateMany({
     where: { state: 'published', expiresAt: { lte: now } },
