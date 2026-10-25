@@ -1,0 +1,2 @@
+# The nudity model is 358 MB: rebuilt by scripts/fetch-nudity-model.sh, never committed.
+models/*.onnx

@@ -76,3 +76,40 @@ tmp/
 apps/api/android/
 apps/api/ios/
 apps/api/app.json
+
+# Test leftovers: phone screenshots, screen dumps (.xml), copied app
+# databases (.db), screen recordings, map exports
+.codex-*
+.tmp-*
+/tmp-*
+*.h264
+
+# Keys and signing files - never commit (Firebase service account, Apple, Android)
+*firebase-adminsdk*.json
+*service-account*.json
+*.p8
+*.p12
+*.jks
+*.keystore
+!debug.keystore
+
+# The phone address npm run connect remembered (per machine)
+.phone-ip
+
+# Design reviews: screenshots, recordings and zips stay on this machine (about
+# 125 MB); the written notes beside them are kept in git.
+docs/design-review/**
+!docs/design-review/**/
+!docs/design-review/**/*.md
+
+# Tool output (previews, layout dumps, PDFs) and stray archives
+output/
+*.zip
+
+# The face service's nudity model is rebuilt by its script (358 MB)
+apps/face-service/models/*.onnx
+
+# Android build caches inside the app's own native modules
+.gradle/
+apps/mobile/modules/*/android/build/
+.cxx/
