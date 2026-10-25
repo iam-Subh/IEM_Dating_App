@@ -1,260 +1,75 @@
-import React, { useRef, useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Image,
-  Animated,
-  PanResponder,
-  Dimensions,
-  Platform,
-  StatusBar,
-  TouchableOpacity,
-} from 'react-native';
+import React from 'react';
+import { View, Text, Image, Pressable, StyleSheet, StatusBar, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { colors } from '../../../core/theme/colors';
-import { SlideAgreeButton } from '../../../components/ui/SlideAgreeButton';
-
-
-const { width } = Dimensions.get('window');
-
-export const WelcomeScreen = () => {
-  const navigation = useNavigation<any>();
-  
-  const handleStart = () => {
-    navigation.navigate('Login');
-  };
-
-  return (
-    <>
-      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
-      
-      {/* Background Gradient similar to the requested image */}
-      <LinearGradient
-        colors={['#8C2617', '#361512', '#121212', '#0A0A0A']}
-        locations={[0, 0.3, 0.7, 1]}
-        style={styles.container}
-      >
-        <View style={styles.topArea}>
-          <Text style={styles.headerLogo}>IEM CONNECT</Text>
-
-          {/* Floating Images Setup */}
-          <View style={styles.cardsContainer}>
-            {/* Background floating card (Left) */}
-            <View style={[styles.imageCard, styles.cardLeft]}>
-              <View style={styles.cardContent}>
-                <Image 
-                  source={{ uri: 'https://i.pravatar.cc/400?img=11' }} 
-                  style={styles.cardImage}
-                />
-                <LinearGradient
-                  colors={['transparent', 'rgba(0,0,0,0.8)']}
-                  style={styles.imageOverlay}
-                >
-                  <Text style={styles.cardName}>Akash, 19 <View style={styles.onlineDot}/></Text>
-                  <Text style={styles.cardInfo}>Kolkata</Text>
-                </LinearGradient>
-              </View>
-              
-              {/* Floating purple icon */}
-              <View style={[styles.floatingIcon, styles.purpleIcon]}>
-                <MaterialCommunityIcons name="gift" size={24} color="#FFF" />
-              </View>
-            </View>
-
-            {/* Foreground floating card (Right) */}
-            <View style={[styles.imageCard, styles.cardRight]}>
-              <View style={styles.cardContent}>
-                <Image 
-                  source={{ uri: 'https://i.pravatar.cc/400?img=5' }} 
-                  style={styles.cardImage}
-                />
-                <LinearGradient
-                  colors={['transparent', 'rgba(0,0,0,0.8)']}
-                  style={styles.imageOverlay}
-                >
-                  <Text style={styles.cardName}>Rupsa, 19 <View style={styles.onlineDot}/></Text>
-                  <Text style={styles.cardInfo}>Howrah</Text>
-                </LinearGradient>
-              </View>
-
-              {/* Floating blue icon */}
-              <View style={[styles.floatingIcon, styles.blueIcon]}>
-                <MaterialCommunityIcons name="email" size={20} color="#FFF" />
-              </View>
-
-              {/* Floating red icon */}
-              <View style={[styles.floatingIcon, styles.redIcon]}>
-                <MaterialCommunityIcons name="heart" size={28} color="#FFF" />
-              </View>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.bottomArea}>
-          {/* Typography */}
-          <Text style={styles.title}>
-            Find Your{'\n'}
-            <Text style={styles.titleHighlight}>Perfect</Text> Match
-          </Text>
-          
-          <Text style={styles.subtitle}>
-            Meet New People, Spark Real Connections,{'\n'}And See Where It Goes.
-          </Text>
-
-
-          {/* Swipe to Start Slider (Animated Component) */}
-          <SlideAgreeButton onAgree={handleStart} />
-        </View>
-      </LinearGradient>
-    </>
-  );
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import Svg, { Defs, Mask, Rect, Stop, LinearGradient as SvgGradient, Image as SvgImage } from 'react-native-svg';
+import { GoogleMark } from '../onboarding/GoogleMark';
+import { ui } from '../onboarding/OnboardingFrame';
+// Keep both first-page palettes for the theme review.
+const welcomePalettes = {
+  light: {
+    canvas: '#F4E3E8', top: '#F5CDDA', middle: '#F1D8E1',
+    text: '#352335', secondary: '#665065', border: '#A5819C',
+    primary: '#712C48', onPrimary: '#FFF7FA', buttonInset: '#8B405C', emailBackground: '#E5C4D1',
+  },
+  dark: {
+    canvas: '#30232E', top: '#684052', middle: '#493142',
+    text: '#FFF2F5', secondary: '#C8B6C1', border: '#765362',
+    primary: '#E8AEC3', onPrimary: '#3C2030', buttonInset: '#F3C7D7', emailBackground: '#553748',
+  },
 };
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  topArea: {
-    flex: 1.2,
-    alignItems: 'center',
-    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 40) + 20 : 60,
-  },
-  headerLogo: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-    marginBottom: 40,
-  },
-  cardsContainer: {
-    width: '100%',
-    height: 320,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  imageCard: {
-    width: 200,
-    height: 280,
-    borderRadius: 30,
-    position: 'absolute',
-    backgroundColor: '#333',
-    elevation: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
-  },
-  cardContent: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 30,
-    overflow: 'hidden',
-  },
-  cardLeft: {
-    transform: [{ rotate: '-12deg' }, { translateX: -40 }, { translateY: -10 }],
-    zIndex: 1,
-  },
-  cardRight: {
-    transform: [{ rotate: '8deg' }, { translateX: 50 }, { translateY: 20 }],
-    zIndex: 2,
-  },
-  cardImage: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
-  },
-  imageOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 100,
-    justifyContent: 'flex-end',
-    padding: 20,
-    paddingBottom: 24,
-  },
-  cardName: {
-    color: '#FFF',
-    fontSize: 18,
-    fontWeight: '700',
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  onlineDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#4ade80',
-    marginLeft: 6,
-    marginBottom: 2,
-  },
-  cardInfo: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 12,
-    marginTop: 2,
-  },
-  floatingIcon: {
-    position: 'absolute',
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-  },
-  purpleIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#7c3aed',
-    left: -24,
-    bottom: 80,
-  },
-  blueIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#3b82f6',
-    top: -15,
-    left: 45,
-  },
-  redIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#ef4444',
-    right: -20,
-    bottom: 40,
-  },
-
-  bottomArea: {
-    flex: 1,
-    paddingHorizontal: 24,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 32,
-    justifyContent: 'flex-end',
-  },
-  title: {
-    color: '#FFF',
-    fontSize: 42,
-    fontWeight: '800',
-    textAlign: 'center',
-    lineHeight: 48,
-    marginBottom: 16,
-    letterSpacing: -0.5,
-  },
-  titleHighlight: {
-    color: '#F94E27', // Bright Orange/Red
-  },
-  subtitle: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: 15,
-    textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: 40,
-    fontWeight: '500',
-  },
+const welcome = welcomePalettes.light;
+export const WelcomeScreen=()=>{
+  const navigation=useNavigation<any>(),insets=useSafeAreaInsets();
+  const {width,height}=useWindowDimensions();
+  const compact=height-insets.top-insets.bottom<700;
+  const artSize=Math.max(0,Math.min(width*0.80,320,height-insets.top-insets.bottom-(compact?320:370)));
+  const headingSize=Math.min(compact?36:43,(width-52)/7.4);
+  return <LinearGradient colors={[welcome.top,welcome.middle,welcome.canvas]} locations={[0,0.48,1]} style={{flex:1}}>
+    <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent/>
+    <View style={[s.content,{paddingTop:insets.top+12,paddingBottom:insets.bottom+12}]}>
+      <View style={[s.art,{marginBottom:compact?12:24}]}><View style={[s.artScene,{height:artSize}]}><Image source={require("../../../../assets/illustrations/welcome-floating-heart-3d.png")} style={s.heartLeft} blurRadius={3} resizeMode="contain" accessible={false}/><Image source={require("../../../../assets/illustrations/welcome-floating-heart-3d.png")} style={s.heartRight} blurRadius={4} resizeMode="contain" accessible={false}/><Svg width={artSize} height={artSize} accessible={false}>
+        <Defs>
+          <SvgGradient id="coupleFade" x1="0%" y1="0%" x2="0%" y2="100%">
+            <Stop offset="0" stopColor="white" stopOpacity={1}/>
+            <Stop offset="0.87" stopColor="white" stopOpacity={1}/>
+            <Stop offset="0.94" stopColor="white" stopOpacity={0.80}/>
+            <Stop offset="0.98" stopColor="white" stopOpacity={0}/>
+          </SvgGradient>
+          <Mask id="coupleMask" x="0" y="0" width="100%" height="100%">
+            <Rect width={artSize} height={artSize} fill="url(#coupleFade)"/>
+          </Mask>
+        </Defs>
+        <SvgImage href={require("../../../../assets/illustrations/welcome-couple-3d.png")} width={artSize} height={artSize} preserveAspectRatio="xMidYMid meet" mask="url(#coupleMask)"/>
+      </Svg></View></View>
+      <Text accessibilityRole="header" style={[s.title,{fontSize:headingSize,lineHeight:headingSize+4}]}>Someone new.{'\n'}Something real.</Text>
+      <Text style={s.subtitle}>Meet people from your college.{ '\n'}Start with a little about you.</Text>
+      <View style={[s.actions,compact&&{gap:8,marginTop:18}]}>
+        <Pressable accessibilityRole="button" onPress={()=>navigation.navigate('SignUp')} style={s.email}><Ionicons name="mail-outline" size={18} color={welcome.onPrimary}/><Text style={s.emailText}>Use college email</Text></Pressable>
+        <Pressable accessibilityRole="button" onPress={()=>navigation.navigate('Login',{initialMethod:'google'})} style={({pressed})=>[s.primary,pressed&&{opacity:0.9}]}><View style={s.googleLabel}><View style={s.googleIcon}><GoogleMark size={18}/></View><Text style={s.primaryText}>Continue with Google</Text></View><View style={s.arrow}><Ionicons name="arrow-forward" size={19} color={welcome.text}/></View></Pressable>
+        <Pressable accessibilityRole="button" onPress={()=>navigation.navigate('Login',{initialForm:'email'})} style={s.signin}><Text style={[ui.detail,{color:welcome.secondary}]}>Already here? <Text style={[ui.link,{color:welcome.text}]}>Sign in</Text></Text></Pressable>
+        {/* Before an account exists: what joining means (docs/SAFETY_AND_LEGAL.md 6). */}
+        <Text style={[ui.detail,{color:welcome.secondary,textAlign:'center',fontSize:11,lineHeight:16,marginTop:6}]}>18+ only. By continuing you agree to our <Text accessibilityRole="link" style={{color:welcome.text,textDecorationLine:'underline'}} onPress={()=>navigation.navigate('Legal',{slug:'terms'})}>Terms</Text> and <Text accessibilityRole="link" style={{color:welcome.text,textDecorationLine:'underline'}} onPress={()=>navigation.navigate('Legal',{slug:'privacy'})}>Privacy Policy</Text>.</Text>
+      </View>
+    </View>
+  </LinearGradient>;
+};
+const s=StyleSheet.create({
+  content:{flex:1,paddingHorizontal:26,maxWidth:540,width:'100%',alignSelf:'center'},
+  art:{marginTop:8,marginBottom:24,marginHorizontal:-26,minHeight:0,overflow:'hidden',flex:1,justifyContent:'center'},
+  artScene:{width:"100%",alignItems:"center",justifyContent:"center"},
+  heartLeft:{position:"absolute",width:86,height:86,left:"4%",top:15,opacity:0.65,transform:[{rotate:"-22deg"}]},
+  heartRight:{position:"absolute",width:72,height:72,right:"3%",top:62,opacity:0.55,transform:[{rotate:"18deg"}]},
+  title:{textAlign:'center',fontFamily:'CormorantGaramond_600SemiBold',fontSize:43,lineHeight:47,paddingBottom:6,includeFontPadding:true,letterSpacing:-1.1,color:welcome.text},
+  subtitle:{textAlign:'center',fontFamily:'DMSans_400Regular',fontSize:14,lineHeight:22,color:welcome.secondary,marginTop:12},
+  actions:{gap:12,marginTop:28},
+  primary:{minHeight:58,borderRadius:30,paddingLeft:50,paddingRight:50,paddingVertical:9,flexDirection:'row',alignItems:'center',justifyContent:'center',backgroundColor:welcome.emailBackground,gap:12},
+  googleLabel:{flexDirection:'row',alignItems:'center',gap:9},
+  googleIcon:{width:26,height:26,borderRadius:13,backgroundColor:'#FFFFFF',alignItems:'center',justifyContent:'center'},
+  primaryText:{fontFamily:'DMSans_700Bold',fontSize:14,color:welcome.text},
+  arrow:{position:"absolute",right:10,width:38,height:38,borderRadius:20,backgroundColor:'#DAB2C2',alignItems:'center',justifyContent:'center'},
+  emailText:{fontFamily:'DMSans_700Bold',fontSize:15,color:welcome.onPrimary},
+  email:{minHeight:58,borderRadius:30,backgroundColor:welcome.primary,alignItems:'center',justifyContent:'center',flexDirection:'row',gap:10},signin:{marginTop:4,minHeight:42,alignItems:'center',justifyContent:'center'},
 });

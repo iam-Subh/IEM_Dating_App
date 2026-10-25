@@ -1,300 +1,37 @@
-import React, { useState, useRef, useEffect } from "react";
+import { makeMainPhoto, profilePhotoUrls, validProfileVideoDuration } from '../onboarding/profileValues';
+import { completeProfileUpload, explicitUploadMessage, tellBeingChecked } from '../../safety/mediaCheck';
+import { PhotoIntroduction } from '../onboarding/PhotoIntroduction';
+import { NativeCameraRecorder } from '../onboarding/ProfileVideoRecorder';
+import { ProfileVideoPreview } from '../onboarding/ProfileVideoPreview';
+import {afterScreenTransition} from '../onboarding/afterScreenTransition';
+import {videoPosters} from '../onboarding/videoPosterService';
+import { ProfilePhotoPreview } from '../onboarding/ProfilePhotoPreview';
+import { PhotoCropModal } from '../../../screens/main/profile/PhotoCropModal';
+import { connectionColors } from '../onboarding/ConnectionDesign';
+import { useOnboarding } from '../onboarding/useOnboarding';
+import { rose } from '../onboarding/theme';
+import React, { useState, useRef, useEffect, useLayoutEffect } from "react";
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  StatusBar,
-  Animated,
-  SafeAreaView,
-  Image,
-  ActivityIndicator,
   Platform,
   Alert,
-  ActionSheetIOS,
-  Modal
+  InteractionManager,
+  Modal,
+  Linking
 } from "react-native";
-import { useNavigation } from "@react-navigation/native";
-import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useNavigation, useRoute } from "@react-navigation/native";
 import * as ImagePicker from 'expo-image-picker';
-import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
-import { useVideoPlayer, VideoView } from 'expo-video';
+import * as MediaLibrary from 'expo-media-library';
+import { photoExtFromAsset, videoExtFromAsset } from '../../../utils/mediaFileExt';
 import { Video } from 'react-native-compressor';
 import { useDispatch } from "react-redux";
-import { completeOnboarding, updateUser } from "../../../store/authSlice";
+import { saveOnboardingDraft, updateUser } from "../../../store/authSlice";
 import { api } from "../../../services/api";
-import { store } from "../../../store";
-
-let Cropper: any = null;
-if (Platform.OS === 'web') {
-  Cropper = require('react-easy-crop').default;
-}
-
-type VideoPreviewProps = {
-  uri: string;
-};
-
-const VideoPreview = ({ uri }: VideoPreviewProps) => {
-  const [isMuted, setIsMuted] = useState(true);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [hasEnded, setHasEnded] = useState(false);
-
-  const player = useVideoPlayer(uri, (player) => {
-    player.loop = false; // Stop looping to allow one full play
-    player.muted = true;
-    player.play();
-  });
-
-  useEffect(() => {
-    if (!player) return;
-
-    // Sync initial state
-    setIsPlaying(player.playing);
-
-    const playingSub = player.addListener('playingChange', (event) => {
-      setIsPlaying(event.isPlaying);
-      if (event.isPlaying) {
-        setHasEnded(false);
-      }
-    });
-
-    const endSub = player.addListener('playToEnd', () => {
-      setIsPlaying(false);
-      setHasEnded(true);
-    });
-
-    return () => {
-      playingSub.remove();
-      endSub.remove();
-    };
-  }, [player]);
-
-  const toggleMute = (e: any) => {
-    // Prevent the parent touchable from catching this event
-    e.stopPropagation();
-    const nextMuted = !isMuted;
-    player.muted = nextMuted;
-    setIsMuted(nextMuted);
-  };
-
-  const togglePlay = (e: any) => {
-    e.stopPropagation();
-    if (player.playing) {
-      player.pause();
-    } else {
-      if (hasEnded) {
-        player.seekBy(-player.currentTime); // replay from start
-        setHasEnded(false);
-      }
-      player.play();
-    }
-  };
-
-  return (
-    <View style={StyleSheet.absoluteFill}>
-      <VideoView 
-        style={styles.heroMedia} 
-        player={player} 
-        nativeControls={false}
-        contentFit="cover"
-      />
-      <View style={styles.videoControlsOverlay}>
-        <TouchableOpacity style={styles.controlButton} onPress={togglePlay}>
-          <MaterialCommunityIcons name={isPlaying ? "pause" : "play"} size={20} color="#FFF" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.controlButton} onPress={toggleMute}>
-          <MaterialCommunityIcons name={isMuted ? "volume-off" : "volume-high"} size={20} color="#FFF" />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-};
-
-const getCroppedImg = (imageSrc: string, pixelCrop: any): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const image = new (globalThis as any).Image();
-    image.src = imageSrc;
-    image.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = pixelCrop.width;
-      canvas.height = pixelCrop.height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return reject(new Error('No 2d context'));
-      ctx.drawImage(
-        image,
-        pixelCrop.x,
-        pixelCrop.y,
-        pixelCrop.width,
-        pixelCrop.height,
-        0,
-        0,
-        pixelCrop.width,
-        pixelCrop.height
-      );
-      canvas.toBlob((blob) => {
-        if (!blob) return reject(new Error('Canvas is empty'));
-        resolve(URL.createObjectURL(blob));
-      }, 'image/jpeg');
-    };
-    image.onerror = (error: any) => reject(error);
-  });
-};
-
-const WebCropModal = ({ imageUri, onCrop, onCancel }: { imageUri: string, onCrop: (uri: string) => void, onCancel: () => void }) => {
-  const [crop, setCrop] = useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = useState(1);
-  const [croppedAreaPixels, setCroppedAreaPixels] = useState<any>(null);
-
-  const onCropComplete = (croppedArea: any, croppedAreaPixels: any) => {
-    setCroppedAreaPixels(croppedAreaPixels);
-  };
-
-  const handleSave = async () => {
-    try {
-      const croppedImg = await getCroppedImg(imageUri, croppedAreaPixels);
-      onCrop(croppedImg);
-    } catch(e) {
-      console.error(e);
-      onCancel();
-    }
-  };
-
-  if (!Cropper) return null;
-
-  return (
-    <View style={StyleSheet.absoluteFill}>
-      <View style={{ flex: 1, backgroundColor: '#000' }}>
-        {Platform.OS === 'web' && React.createElement('div', { style: { position: 'relative', width: '100%', height: '85%' } }, 
-          <Cropper
-            image={imageUri}
-            crop={crop}
-            zoom={zoom}
-            aspect={3 / 4}
-            objectFit="contain"
-            onCropChange={setCrop}
-            onCropComplete={onCropComplete}
-            onZoomChange={setZoom}
-            style={{
-              containerStyle: { backgroundColor: '#000' },
-              overlayStyle: { backgroundColor: 'rgba(0,0,0,0.85)' }
-            }}
-          />
-        )}
-        <View style={{ height: '15%', justifyContent: 'center', alignItems: 'center', flexDirection: 'row', gap: 20 }}>
-          <TouchableOpacity onPress={onCancel} style={{ padding: 10 }}>
-            <Text style={{ color: '#FFF', fontSize: 16 }}>Cancel</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={handleSave} style={{ backgroundColor: '#F94E27', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 20 }}>
-            <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '700' }}>Crop & Save</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </View>
-  );
-};
-
-const NativeCameraRecorder = ({ onRecord, onCancel }: { onRecord: (uri: string) => void, onCancel: () => void }) => {
-  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-  const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
-  const [isRecording, setIsRecording] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
-  const cameraRef = useRef<any>(null);
-  const timerRef = useRef<any>(null);
-
-  useEffect(() => {
-    if (!cameraPermission?.granted) requestCameraPermission();
-    if (!microphonePermission?.granted) requestMicrophonePermission();
-    return () => clearInterval(timerRef.current);
-  }, [cameraPermission, microphonePermission]);
-
-  if (!cameraPermission?.granted || !microphonePermission?.granted) {
-    return (
-      <View style={{flex:1, backgroundColor:'#000', justifyContent:'center', alignItems:'center'}}>
-        <ActivityIndicator color="#FFF" />
-      </View>
-    );
-  }
-
-  const startRecording = async () => {
-    if (cameraRef.current) {
-      setIsRecording(true);
-      setElapsed(0);
-      timerRef.current = setInterval(() => setElapsed(prev => prev + 1), 1000);
-      try {
-        const video = await cameraRef.current.recordAsync({
-          maxDuration: 60,
-        });
-        if (video && video.uri) {
-           onRecord(video.uri);
-        }
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setIsRecording(false);
-        if (timerRef.current) clearInterval(timerRef.current);
-      }
-    }
-  };
-
-  const stopRecording = () => {
-    if (cameraRef.current && isRecording) {
-      cameraRef.current.stopRecording();
-    }
-  };
-
-  const formatTime = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
-  };
-
-  return (
-    <View style={StyleSheet.absoluteFill}>
-       <CameraView 
-         ref={cameraRef}
-         style={{ flex: 1 }} 
-         facing="front"
-         mode="video"
-       >
-         {isRecording && (
-          <View style={{ position: 'absolute', top: 50, width: '100%', alignItems: 'center' }}>
-            <View style={{ backgroundColor: 'rgba(249, 78, 39, 0.8)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#FFF', marginRight: 8 }} />
-              <Text style={{ color: '#FFF', fontWeight: '700', fontSize: 16 }}>{formatTime(elapsed)} / 1:00</Text>
-            </View>
-          </View>
-        )}
-
-        <View style={{ position: 'absolute', bottom: 40, width: '100%', alignItems: 'center' }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', width: '100%', justifyContent: 'space-evenly' }}>
-            <TouchableOpacity onPress={onCancel} style={{ padding: 10, width: 80, alignItems: 'center' }}>
-              <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '600' }}>Cancel</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              onPress={isRecording ? stopRecording : startRecording}
-              style={{
-                width: 76, height: 76, borderRadius: 38, 
-                backgroundColor: isRecording ? '#F94E27' : '#FFF',
-                justifyContent: 'center', alignItems: 'center',
-                borderWidth: 4, borderColor: 'rgba(255,255,255,0.3)'
-              }}
-            >
-              <View style={{ 
-                width: isRecording ? 26 : 56, 
-                height: isRecording ? 26 : 56, 
-                borderRadius: isRecording ? 4 : 28, 
-                backgroundColor: isRecording ? '#FFF' : '#F94E27' 
-              }} />
-            </TouchableOpacity>
-            
-            <View style={{ width: 80 }} />
-          </View>
-        </View>
-       </CameraView>
-    </View>
-  );
-};
+import { LastPhotoWarningModal } from '../../../components/LastPhotoWarningModal';
+import { File as FileSystemFile, UploadType as FileSystemUploadType } from 'expo-file-system';
 
 const WebCameraRecorder = ({ onRecord, onCancel }: { onRecord: (uri: string) => void, onCancel: () => void }) => {
   const videoRef = useRef<any>(null);
@@ -304,6 +41,7 @@ const WebCameraRecorder = ({ onRecord, onCancel }: { onRecord: (uri: string) => 
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<any>(null);
   const timerRef = useRef<any>(null);
+  const recordingStarted = useRef(0);
 
   useEffect(() => {
     const startCamera = async () => {
@@ -332,6 +70,7 @@ const WebCameraRecorder = ({ onRecord, onCancel }: { onRecord: (uri: string) => 
   const startRecording = () => {
     if (!streamRef.current) return;
     chunksRef.current = [];
+    recordingStarted.current = Date.now();
     
     // We try to use webm if possible, or mp4 if supported
     let options = { mimeType: 'video/webm;codecs=vp8,opus' };
@@ -344,6 +83,7 @@ const WebCameraRecorder = ({ onRecord, onCancel }: { onRecord: (uri: string) => 
       if (e.data.size > 0) chunksRef.current.push(e.data);
     };
     mediaRecorder.onstop = () => {
+      if (Date.now() - recordingStarted.current < 15000) { Alert.alert('Video too short', 'Record at least 15 seconds.'); return; }
       const blob = new Blob(chunksRef.current, { type: chunksRef.current[0]?.type || 'video/mp4' });
       const url = URL.createObjectURL(blob);
       onRecord(url);
@@ -352,7 +92,7 @@ const WebCameraRecorder = ({ onRecord, onCancel }: { onRecord: (uri: string) => 
     mediaRecorder.start();
     setIsRecording(true);
     setElapsed(0);
-    timerRef.current = setInterval(() => setElapsed(prev => prev + 1), 1000);
+    timerRef.current = setInterval(() => { setElapsed(prev => prev + 1); if (Date.now() - recordingStarted.current >= 60000 && mediaRecorder.state === 'recording') { mediaRecorder.stop(); setIsRecording(false); clearInterval(timerRef.current); } }, 1000);
   };
 
   const stopRecording = () => {
@@ -377,14 +117,14 @@ const WebCameraRecorder = ({ onRecord, onCancel }: { onRecord: (uri: string) => 
           autoPlay: true,
           playsInline: true,
           muted: true, // Mute local playback to avoid echo
-          style: { width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }
+          style: { width: '100%', height: '100%', objectFit: 'cover' }
         })}
         
         {isRecording && (
           <View style={{ position: 'absolute', top: 50, width: '100%', alignItems: 'center' }}>
             <View style={{ backgroundColor: 'rgba(249, 78, 39, 0.8)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#FFF', marginRight: 8 }} />
-              <Text style={{ color: '#FFF', fontWeight: '700', fontSize: 16 }}>{formatTime(elapsed)} / 1:00</Text>
+              <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#FBF1F7', marginRight: 8 }} />
+              <Text style={{ color: '#FBF1F7', fontWeight: '700', fontSize: 16 }}>{formatTime(elapsed)} / 1:00</Text>
             </View>
           </View>
         )}
@@ -392,14 +132,14 @@ const WebCameraRecorder = ({ onRecord, onCancel }: { onRecord: (uri: string) => 
         <View style={{ position: 'absolute', bottom: 40, width: '100%', alignItems: 'center' }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', width: '100%', justifyContent: 'space-evenly' }}>
             <TouchableOpacity onPress={onCancel} style={{ padding: 10, width: 80, alignItems: 'center' }}>
-              <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '600' }}>Cancel</Text>
+              <Text style={{ color: '#FBF1F7', fontSize: 16, fontWeight: '600' }}>Cancel</Text>
             </TouchableOpacity>
             
             <TouchableOpacity 
               onPress={isRecording ? stopRecording : startRecording}
               style={{
                 width: 76, height: 76, borderRadius: 38, 
-                backgroundColor: isRecording ? '#F94E27' : '#FFF',
+                backgroundColor: isRecording ? '#E47CA6' : '#FBF1F7',
                 justifyContent: 'center', alignItems: 'center',
                 borderWidth: 4, borderColor: 'rgba(255,255,255,0.3)'
               }}
@@ -408,7 +148,7 @@ const WebCameraRecorder = ({ onRecord, onCancel }: { onRecord: (uri: string) => 
                 width: isRecording ? 26 : 56, 
                 height: isRecording ? 26 : 56, 
                 borderRadius: isRecording ? 4 : 28, 
-                backgroundColor: isRecording ? '#FFF' : '#F94E27' 
+                backgroundColor: isRecording ? '#FBF1F7' : '#E47CA6' 
               }} />
             </TouchableOpacity>
             
@@ -420,150 +160,199 @@ const WebCameraRecorder = ({ onRecord, onCancel }: { onRecord: (uri: string) => 
   );
 };
 
+/**
+ * Where the real-person check stands after a save. Someone who already took
+ * the selfie had their changed media re-checked by the save itself, so they
+ * see that outcome. A first check returns nothing and starts with the selfie.
+ */
+async function faceRecheck() {
+  try {
+    const face = (await api.get('/verification/face')).data.data;
+    if (!['verified', 'pending_review', 'needs_fix'].includes(face?.status) || !face.items?.length) return undefined;
+    return {status: face.status, reason: face.reason, items: face.items};
+  } catch {
+    return undefined;
+  }
+}
+
+/** The stored file a URL names, whichever host served it (storage or CDN). */
+function mediaPath(url: string | null | undefined) {
+  if (!url) return '';
+  try { return new URL(url).pathname; } catch { return url; }
+}
+
 export const PhotoUploadScreen = () => {
   const navigation = useNavigation<any>();
   const dispatch = useDispatch();
+  const o = useOnboarding();
 
-  const [videoUri, setVideoUri] = useState<string | null>(null);
-  const [photos, setPhotos] = useState<(string | null)[]>(Array(6).fill(null));
-  const [originalWebPhotos, setOriginalWebPhotos] = useState<(string | null)[]>(Array(6).fill(null));
+  const route = useRoute<any>();
+  const saved = o.auth.user;
+  const mediaDraft = Platform.OS === 'web' ? null : o.auth.onboardingDraft?.fields.mediaDraft;
+  const [videoUri, setVideoUri] = useState<string | null>(mediaDraft?.videoUri ?? saved?.profileVideoUrl ?? null);
+  const [photos, setPhotos] = useState<(string | null)[]>(Array.from({ length: 6 }, (_, index) => mediaDraft?.photos?.[index] ?? profilePhotoUrls(saved?.photos)[index] ?? null));
+  const [originalPhotos, setOriginalPhotos] = useState<(string | null)[]>(Array.from({length: 6}, (_, index) => mediaDraft?.originalPhotos?.[index] ?? null));
+  useEffect(() => {
+    if (Platform.OS !== 'web') dispatch(saveOnboardingDraft({ fields: { mediaDraft: { videoUri, photos, originalPhotos } } }));
+  }, [videoUri, photos, originalPhotos, dispatch]);
+  useEffect(() => {
+    if (Platform.OS === 'web' || !mediaDraft) return;
+    const exists = (uri: string | null) => !uri || /^https?:/.test(uri) || new FileSystemFile(uri).exists;
+    if (!exists(videoUri)) setVideoUri(null);
+    setPhotos(current => current.map(uri => exists(uri) ? uri : null));
+    setOriginalPhotos(current => current.map(uri => exists(uri) ? uri : null));
+  }, []);
   const [isUploading, setIsUploading] = useState(false);
-  const [showVideoModal, setShowVideoModal] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const [pickerError, setPickerError] = useState('');
+  const [uploadStatus, setUploadStatus] = useState('');
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const completedUploads = useRef(new Map<string, string>());
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewPrepared, setPreviewPrepared] = useState(false);
+  const openPreview = () => {setPreviewPrepared(true); setShowPreview(true);};
+  const [photoPreviewIndex, setPhotoPreviewIndex] = useState<number | null>(null);
   const [showNativeCamera, setShowNativeCamera] = useState(false);
   const [showWebCamera, setShowWebCamera] = useState(false);
-  const [webCropImage, setWebCropImage] = useState<{ uri: string, index: number } | null>(null);
+  const [cropImage, setCropImage] = useState<{ uri: string, index: number } | null>(null);
+  const [protectedPhotoIndex, setProtectedPhotoIndex] = useState<number | null>(null);
+  const mediaPickerBusy = useRef(false);
 
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(30)).current;
-  const modalScale = useRef(new Animated.Value(0.8)).current;
-  const modalOpacity = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 800,
-        useNativeDriver: true,
-      }),
-      Animated.spring(slideAnim, {
-        toValue: 0,
-        friction: 8,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, []);
+  const ensureGalleryAccess = async (kind: 'photo' | 'video') => {
+    setPickerError('');
+    // ImagePicker uses the system picker on Android 13+ and does not request
+    // library access. MediaLibrary requests the native, granular permission.
+    let access = Platform.OS === 'android'
+      ? await MediaLibrary.getPermissionsAsync(false, [kind])
+      : await ImagePicker.getMediaLibraryPermissionsAsync();
+    if (access.granted || access.accessPrivileges === 'limited') return true;
+    if (access.canAskAgain) {
+      access = Platform.OS === 'android'
+        ? await MediaLibrary.requestPermissionsAsync(false, [kind])
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    }
+    if (access.granted || access.accessPrivileges === 'limited') return true;
+    setPickerError(`Allow ${kind} access to choose a ${kind} from your gallery.`);
+    if (!access.canAskAgain) Alert.alert('Gallery access needed', `Enable ${kind} access in app settings.`, [
+      {text: 'Cancel', style: 'cancel'},
+      {text: 'Open settings', onPress: () => {void Linking.openSettings().catch(() => setPickerError('Could not open settings. Open the app permissions in your device settings.'));}},
+    ]);
+    return false;
+  };
 
   const handleVideoSelection = async (type: 'library' | 'camera') => {
-    let result;
     if (type === 'camera') {
-      if (Platform.OS === 'web') {
-        setShowWebCamera(true);
-        return;
-      }
-      setShowNativeCamera(true);
+      if (Platform.OS === 'web') setShowWebCamera(true);
+      else setShowNativeCamera(true);
       return;
-    } else {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Sorry, we need camera roll permissions to select a video!');
-        return;
+    }
+    if (mediaPickerBusy.current) return;
+    mediaPickerBusy.current = true;
+    try {
+      if (!await ensureGalleryAccess('video')) return;
+      const result = await ImagePicker.launchImageLibraryAsync({mediaTypes: ['videos'], allowsEditing: true, quality: 1});
+      if (!result.canceled && result.assets?.length) {
+        if (!validProfileVideoDuration(result.assets[0].duration)) {Alert.alert('Check video length', 'Choose a video of 15–60 seconds.'); return;}
+        setVideoUri(result.assets[0].uri);
+        setPickerError('');
       }
-      result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['videos'],
-        allowsEditing: true,
-        quality: 1,
+    } catch {
+      setPickerError('Could not open the video gallery. Try again.');
+    } finally {
+      mediaPickerBusy.current = false;
+    }
+  };
+
+  const openOptions = (kind: 'photo' | 'video', index = 0) => navigation.navigate('PhotoMediaOptions', {kind, index, hasMedia: kind === 'video' ? !!videoUri : !!photos[index], photoUri: kind === 'photo' ? photos[index] : undefined, returnKey: route.key});
+
+  const correctionTarget = route.params?.correctionTarget;
+  useEffect(() => {
+    if (!correctionTarget) return;
+    return afterScreenTransition(navigation, () => {
+      navigation.setParams({correctionTarget: undefined});
+      // The check reports stored addresses; the profile may serve the same file from the CDN.
+      const index = correctionTarget.url ? photos.findIndex(uri => !!uri && mediaPath(uri) === mediaPath(correctionTarget.url)) : 0;
+      if (correctionTarget.kind === 'video') openOptions('video');
+      else if (index >= 0) openOptions('photo', index);
+      else setPickerError('This photo has changed. Choose the photo you want to update.');
+    });
+  }, [correctionTarget, navigation]);
+
+  // Return data is serializable. Start the picker after the native sheet closes.
+  const returnedAction = route.params?.photoMediaAction;
+  useLayoutEffect(() => {
+    if (!returnedAction) return;
+    const {action, index} = returnedAction;
+    setUploadError('');
+    if (action === 'main') {
+      navigation.setParams({photoMediaAction: undefined});
+      setPhotos(current => makeMainPhoto(current, index));
+      setOriginalPhotos(current => makeMainPhoto(current, index));
+    } else if (action === 'remove') {
+      navigation.setParams({photoMediaAction: undefined});
+      if (typeof index === 'number' && returnedAction.kind !== 'video') removeImage(index);
+      else setVideoUri(null);
+    } else {
+      return afterScreenTransition(navigation, () => {
+        navigation.setParams({photoMediaAction: undefined});
+        if (action === 'crop') {
+          const uri = originalPhotos[index] || photos[index];
+          if (uri) setCropImage({uri, index});
+        } else if (action === 'preview') openPreview();
+        else if (action === 'replace') void pickImage(index);
+        else void handleVideoSelection(action);
       });
     }
-
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      setVideoUri(result.assets[0].uri);
-    }
-  };
-
-  const openVideoModal = () => {
-    setShowVideoModal(true);
-    Animated.parallel([
-      Animated.spring(modalScale, {
-        toValue: 1,
-        friction: 8,
-        useNativeDriver: true,
-      }),
-      Animated.timing(modalOpacity, {
-        toValue: 1,
-        duration: 300,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  };
-
-  const closeVideoModal = () => {
-    Animated.parallel([
-      Animated.spring(modalScale, {
-        toValue: 0.8,
-        friction: 8,
-        useNativeDriver: true,
-      }),
-      Animated.timing(modalOpacity, {
-        toValue: 0,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-    ]).start(() => setShowVideoModal(false));
-  };
-
-  const pickVideo = () => {
-    openVideoModal();
-  };
+  }, [returnedAction]);
 
   const pickImage = async (index: number) => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Sorry, we need camera roll permissions to make this work!');
-      return;
-    }
-
-    let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [3, 4],
-      quality: 0.8,
-    });
-
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      if (Platform.OS === 'web') {
-        const rawUri = result.assets[0].uri;
-        const newOriginals = [...originalWebPhotos];
-        newOriginals[index] = rawUri;
-        setOriginalWebPhotos(newOriginals);
-        setWebCropImage({ uri: rawUri, index });
-      } else {
-        const newPhotos = [...photos];
-        newPhotos[index] = result.assets[0].uri;
-        setPhotos(newPhotos);
+    if (mediaPickerBusy.current) return;
+    mediaPickerBusy.current = true;
+    // The first selected image is the main photo, regardless of the tapped slot.
+    if (!photos.some(Boolean)) index = 0;
+    try {
+      if (!await ensureGalleryAccess('photo')) return;
+      const result = await ImagePicker.launchImageLibraryAsync({mediaTypes: ['images'], allowsEditing: false, quality: 1});
+      if (!result.canceled && result.assets?.length) {
+        setCropImage({uri: result.assets[0].uri, index});
+        setPickerError('');
       }
+    } catch {
+      setPickerError('Could not open the photo gallery. Try again.');
+    } finally {
+      mediaPickerBusy.current = false;
     }
   };
 
   const removeImage = (index: number) => {
-    const newPhotos = [...photos];
-    newPhotos[index] = null;
+    if (!photos[index]) return;
+    if (photos.filter(Boolean).length <= 1) {
+      setProtectedPhotoIndex(index);
+      return;
+    }
+    const kept = photos.map((uri, slot) => ({ uri, original: originalPhotos[slot] })).filter((photo, slot) => slot !== index && !!photo.uri);
+    const newPhotos = [...kept.map(photo => photo.uri), ...Array(6 - kept.length).fill(null)];
     setPhotos(newPhotos);
     
-    if (Platform.OS === 'web') {
-      const newOriginals = [...originalWebPhotos];
-      newOriginals[index] = null;
-      setOriginalWebPhotos(newOriginals);
-    }
+    const newOriginals = [...kept.map(photo => photo.original), ...Array(6 - kept.length).fill(null)];
+    setOriginalPhotos(newOriginals);
   };
 
   const handleFinish = async () => {
+    if (!videoUri || !photos.some(Boolean)) {
+      Alert.alert('Add a profile photo', 'Add at least one photo and a profile video of 15–60 seconds.');
+      return;
+    }
     setIsUploading(true);
+    setUploadError('');
+    setUploadProgress(null);
+    setUploadStatus('Preparing your media…');
     try {
       const filePayloads: { id: string, type: 'video' | 'photo', ext: string, uri: string }[] = [];
       let finalVideoUri = videoUri;
 
       // 1. Compression (Native only, bypass for web)
-      if (videoUri && Platform.OS !== 'web') {
+      if (videoUri && !/^https?:/.test(videoUri) && !completedUploads.current.has(videoUri) && Platform.OS !== 'web') {
         console.log('Compressing video natively...');
         try {
            finalVideoUri = await Video.compress(videoUri, {
@@ -577,70 +366,80 @@ export const PhotoUploadScreen = () => {
       }
 
       // 2. Prepare Payload
-      if (finalVideoUri) {
-         const videoExt = finalVideoUri.split('.').pop()?.toLowerCase() || 'mp4';
+      if (finalVideoUri && !/^https?:/.test(finalVideoUri) && !completedUploads.current.has(videoUri)) {
+         const videoExt = videoExtFromAsset(finalVideoUri);
          filePayloads.push({ id: 'vid', type: 'video', ext: videoExt, uri: finalVideoUri });
       }
 
       const validPhotos = photos.map((uri, i) => ({ uri, index: i })).filter(p => p.uri !== null);
-      validPhotos.forEach((photo) => {
-         const photoExt = photo.uri!.split('.').pop()?.toLowerCase() || 'jpeg';
+      validPhotos.filter(photo => !/^https?:/.test(photo.uri!) && !completedUploads.current.has(photo.uri!)).forEach((photo) => {
+         const photoExt = photoExtFromAsset(photo.uri!);
          filePayloads.push({ id: `photo_${photo.index}`, type: 'photo', ext: photoExt, uri: photo.uri! });
       });
 
       // 3. Request AWS Presigned URLs
       console.log('Requesting Direct S3 Upload Tickets...');
-      const presignRes = await api.post('/upload/presigned-urls', {
-         files: filePayloads.map(f => ({ type: f.type, ext: f.ext }))
-      });
-      const uploadTickets = presignRes.data.data;
+      const uploadTickets = filePayloads.length ? (await api.post('/upload/presigned-urls', { files: filePayloads.map(f => ({ type: f.type, ext: f.ext })) })).data.data : [];
+      let completed = 0;
+      if (filePayloads.length) {setUploadProgress(0); setUploadStatus(`Uploading 0 of ${filePayloads.length} files…`);}
 
       // 4. HTTP PUT directly to S3
       console.log('Pushing binaries directly to S3...');
-      const uploadResults = await Promise.all(filePayloads.map(async (file, index) => {
+      // Files the nudity check sent to the team: told once the profile is saved.
+      const heldForReview: ('photo' | 'video')[] = [];
+      const uploads = await Promise.allSettled(filePayloads.map(async (file, index) => {
          const ticket = uploadTickets[index];
          
-         // Fix: More robust file fetching for local URIs
-         let blob;
+         // React Native's fetch takes Content-Type from the blob's own type,
+         // which is empty for a file:// blob. That silently overrode the header,
+         // so S3 stored the object untyped and completion rejected it as not
+         // matching its ticket. A native streaming upload sends the header
+         // verbatim and never holds the whole video in memory.
          if (Platform.OS === 'web') {
            const response = await fetch(file.uri);
-           blob = await response.blob();
-         } else {
-           // For native, fetch(uri) works but needs careful handling of file://
-           const uri = Platform.OS === 'ios' && !file.uri.startsWith('file://') ? `file://${file.uri}` : file.uri;
-           const response = await fetch(uri);
-           blob = await response.blob();
-         }
-
-         const s3Res = await fetch(ticket.uploadUrl, {
-           method: 'PUT',
-           body: blob,
-           headers: {
-             'Content-Type': ticket.contentType
+           const raw = await response.blob();
+           const body = raw.type === ticket.contentType ? raw : new Blob([raw], { type: ticket.contentType });
+           const s3Res = await fetch(ticket.uploadUrl, {
+             method: 'PUT',
+             body,
+             headers: { 'Content-Type': ticket.contentType },
+           });
+           if (!s3Res.ok) {
+             throw new Error(`S3 Upload failed for ${file.type} with status ${s3Res.status}`);
            }
-         });
-
-         if (!s3Res.ok) {
-           throw new Error(`S3 Upload failed for ${file.type} with status ${s3Res.status}`);
+         } else {
+           const uri = file.uri.startsWith('file://') ? file.uri : `file://${file.uri}`;
+           const result = await new FileSystemFile(uri).upload(ticket.uploadUrl, {
+             httpMethod: 'PUT',
+             uploadType: FileSystemUploadType.BINARY_CONTENT,
+             mimeType: ticket.contentType,
+             headers: { 'Content-Type': ticket.contentType },
+           });
+           if (result.status < 200 || result.status >= 300) {
+             throw new Error(`S3 Upload failed for ${file.type} with status ${result.status}`);
+           }
          }
-         await api.post(`/upload/${ticket.assetId}/complete`);
+         if ((await completeProfileUpload(ticket.assetId)).review) heldForReview.push(file.type === 'video' ? 'video' : 'photo');
+         completedUploads.current.set(file.type === 'video' ? videoUri : file.uri, ticket.fileUrl);
+         completed += 1;
+         setUploadProgress(completed / filePayloads.length);
+         setUploadStatus(`Uploading ${completed} of ${filePayloads.length} files…`);
 
          return { type: file.type, url: ticket.fileUrl, id: file.id };
       }));
+      const failed = uploads.find(result => result.status === 'rejected');
+      if (failed?.status === 'rejected') throw failed.reason;
+      const uploadResults = uploads.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
 
-      const uploadedVideo = uploadResults.find(r => r.type === 'video')?.url || null;
+      const uploadedVideo = uploadResults.find(r => r.type === 'video')?.url || completedUploads.current.get(videoUri) || (/^https?:/.test(videoUri) ? videoUri : null);
+      if (uploadedVideo && videoUri) videoPosters.copy(videoUri, uploadedVideo);
       // Filter and sort photos by their original index to maintain order
-      const uploadedPhotosSorted = uploadResults
-        .filter(r => r.type === 'photo')
-        .sort((a, b) => {
-          const idxA = parseInt(a.id.split('_')[1]);
-          const idxB = parseInt(b.id.split('_')[1]);
-          return idxA - idxB;
-        })
-        .map(r => r.url);
+      const uploadedPhotosSorted = validPhotos.map(photo => uploadResults.find(item => item.id === `photo_${photo.index}`)?.url ?? completedUploads.current.get(photo.uri!) ?? photo.uri!);
 
       // 5. Save Final Web-Resolution Links
       console.log('Media uploaded. Saving URLs to profile...');
+      setUploadStatus('Saving your profile…');
+      setUploadProgress(null);
       const profileUpdateRes = await api.put('/profile', {
          profileVideoUrl: uploadedVideo,
          photos: uploadedPhotosSorted,
@@ -649,186 +448,39 @@ export const PhotoUploadScreen = () => {
 
       if (profileUpdateRes.data?.success) {
         dispatch(updateUser(profileUpdateRes.data.data));
+        if (heldForReview.length) tellBeingChecked(heldForReview.includes('video') && heldForReview.length === 1 ? 'video' : 'photo', heldForReview.length);
         
-        console.log('Onboarding process successfully finalized.');
-        dispatch(completeOnboarding());
+        dispatch(saveOnboardingDraft({ step: 'OnboardingReview', fields: { mediaDraft: null } }));
+        if (route.params?.reviewEdit) navigation.goBack();
+        else navigation.replace('RealPersonCheck', { onboarding: true, returnToReview: true, recheck: await faceRecheck() });
       } else {
         throw new Error('Profile update failed on server');
       }
     } catch (error: any) {
       console.error("Upload failed", error?.response?.data || error);
-      Alert.alert("Upload Failed", "There was an error uploading your media.");
+      // A refusal with a reason ("this doesn't look like you") says so: the
+      // generic line hid why a replacement never reached the profile.
+      const notYou = error?.response?.data?.code === 'MAIN_PHOTO_NOT_YOU';
+      const explicit = explicitUploadMessage(error);
+      setUploadError(notYou ? `${error.response.data.message} Choose another photo and tap Retry upload.`
+        : explicit ? `${explicit} Choose another and tap Retry upload.`
+        : 'Could not save your media. Your selections are still here. Tap Retry upload.');
     } finally {
       setIsUploading(false);
     }
   };
 
-  const hasMinimumMedia = videoUri !== null && photos.some(p => p !== null);
-
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" />
-      <View style={styles.headerNav}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <MaterialCommunityIcons name="arrow-left" size={28} color="#FFF" />
-        </TouchableOpacity>
-      </View>
-
-      <Animated.ScrollView 
-        style={[styles.content, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}
-        showsVerticalScrollIndicator={false}
-      >
-        <Text style={styles.title}>Show your vibe</Text>
-        <Text style={styles.subtitle}>
-          Upload a short video and at least 1 photo to complete your profile.
-        </Text>
-
-        <View style={styles.gridContainer}>
-          {/* Hero Video Slot */}
-          <View style={styles.heroSlot}>
-            {videoUri ? (
-              <>
-                <VideoPreview uri={videoUri} />
-                <TouchableOpacity 
-                  style={styles.removeBadge}
-                  onPress={() => setVideoUri(null)}
-                  hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
-                >
-                  <MaterialCommunityIcons name="close" size={16} color="#FFF" />
-                </TouchableOpacity>
-              </>
-            ) : (
-              <TouchableOpacity 
-                style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}
-                onPress={pickVideo}
-                activeOpacity={0.8}
-              >
-                <View style={styles.emptySlotContent}>
-                  <View style={styles.iconCircle}>
-                    <MaterialCommunityIcons name="video-plus" size={32} color="#000" />
-                  </View>
-                  <Text style={styles.slotText}>Vibe Check Video</Text>
-                  <Text style={styles.slotSubtext}>Required (15-60s)</Text>
-                </View>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Photo Slots 2x3 Grid */}
-          <Text style={{ color: '#FFF', fontSize: 20, fontWeight: '700', marginTop: 16, marginBottom: 8, marginLeft: 4 }}>Photos</Text>
-          <View style={styles.photoGrid}>
-            {photos.map((photoUri, index) => (
-              <View key={index} style={styles.photoSlot}>
-                <TouchableOpacity 
-                  style={{ width: '100%', height: '100%' }}
-                  onPress={() => {
-                    if (photoUri) {
-                      if (Platform.OS === 'web') {
-                        setWebCropImage({ uri: originalWebPhotos[index] || photoUri, index });
-                      } else {
-                        if (Platform.OS === 'ios') {
-                          ActionSheetIOS.showActionSheetWithOptions({
-                            options: ['Cancel', 'Replace Photo', 'Remove Photo'],
-                            destructiveButtonIndex: 2,
-                            cancelButtonIndex: 0,
-                          }, (btnIndex) => {
-                            if (btnIndex === 1) pickImage(index);
-                            if (btnIndex === 2) removeImage(index);
-                          });
-                        } else {
-                          Alert.alert(
-                            "Photo Options",
-                            "What would you like to do?",
-                            [
-                              { text: "Replace Photo", onPress: () => pickImage(index) },
-                              { text: "Remove Photo", style: 'destructive', onPress: () => removeImage(index) },
-                              { text: "Cancel", style: "cancel" }
-                            ],
-                            { cancelable: true }
-                          );
-                        }
-                      }
-                    } else {
-                      pickImage(index);
-                    }
-                  }}
-                  activeOpacity={0.8}
-                >
-                  {photoUri ? (
-                    <Image source={{ uri: photoUri }} style={styles.photoMedia} />
-                  ) : (
-                    <View style={styles.emptyPhotoContent}>
-                      <MaterialCommunityIcons name="plus" size={24} color="#FFF" />
-                    </View>
-                  )}
-                </TouchableOpacity>
-                
-                {photoUri && (
-                  <TouchableOpacity 
-                    style={styles.removeBadgeSmall}
-                    onPress={() => removeImage(index)}
-                    hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
-                  >
-                    <MaterialCommunityIcons name="close" size={12} color="#FFF" />
-                  </TouchableOpacity>
-                )}
-              </View>
-            ))}
-          </View>
-        </View>
-
-      </Animated.ScrollView>
-
-      <View style={styles.footer}>
-        <TouchableOpacity 
-          style={[styles.nextButton, (!hasMinimumMedia || isUploading) && styles.disabledButton]} 
-          onPress={handleFinish}
-          disabled={!hasMinimumMedia || isUploading}
-        >
-          {isUploading ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
-              <ActivityIndicator color="#0F1115" style={{ marginRight: 8 }} />
-              <Text style={styles.nextButtonText}>Uploading...</Text>
-            </View>
-          ) : (
-            <Text style={styles.nextButtonText}>Done</Text>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      <Modal transparent visible={showVideoModal} animationType="none">
-        <View style={styles.modalOverlay}>
-          <Animated.View style={[styles.modalContent, { opacity: modalOpacity, transform: [{ scale: modalScale }] }]}>
-            <Text style={styles.modalTitle}>Upload Video</Text>
-            <Text style={styles.modalSubtitle}>
-              Choose how you want to upload your vibe check video.
-            </Text>
-
-            <TouchableOpacity 
-              style={styles.modalPrimaryButton}
-              onPress={() => { closeVideoModal(); setTimeout(() => handleVideoSelection('camera'), 300); }}
-            >
-              <MaterialCommunityIcons name="camera-outline" size={20} color="#000" style={{ marginRight: 8 }} />
-              <Text style={styles.modalPrimaryText}>Shoot Video</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.modalSecondaryButton}
-              onPress={() => { closeVideoModal(); setTimeout(() => handleVideoSelection('library'), 300); }}
-            >
-              <MaterialCommunityIcons name="folder-image" size={20} color="#FFF" style={{ marginRight: 8 }} />
-              <Text style={styles.modalSecondaryText}>Choose from Library</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.modalCancelButton}
-              onPress={closeVideoModal}
-            >
-              <Text style={styles.modalCancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </Animated.View>
-        </View>
-      </Modal>
+    <View style={{flex: 1, backgroundColor: connectionColors.canvas}}>
+      <PhotoIntroduction photos={photos} videoUri={videoUri} busy={isUploading}
+        error={uploadError || pickerError} status={uploadStatus} progress={uploadProgress}
+        label={uploadError ? 'Retry upload' : route.params?.reviewEdit ? 'Save media' : 'Continue'}
+        onBack={o.back} onNext={handleFinish}
+        onPhoto={index => {setUploadError(''); if (photos[index]) setPhotoPreviewIndex(index); else void pickImage(index);}}
+        onPhotoOptions={index => openOptions('photo', index)}
+        onVideo={() => openOptions('video')} onPlay={openPreview}/>
+      {photoPreviewIndex !== null && <ProfilePhotoPreview photos={photos} index={photoPreviewIndex} onIndex={setPhotoPreviewIndex} onClose={() => setPhotoPreviewIndex(null)}/>}
+      {videoUri && previewPrepared && <ProfileVideoPreview key={videoUri} uri={videoUri} visible={showPreview} onClose={() => setShowPreview(false)}/>}
 
       <Modal visible={showWebCamera} transparent animationType="slide">
         <WebCameraRecorder 
@@ -840,9 +492,10 @@ export const PhotoUploadScreen = () => {
         />
       </Modal>
 
-      <Modal visible={showNativeCamera} transparent animationType="slide">
+      <Modal visible={showNativeCamera} transparent hardwareAccelerated animationType="slide" onRequestClose={() => setShowNativeCamera(false)}>
         <NativeCameraRecorder 
-          onCancel={() => setShowNativeCamera(false)} 
+          onCancel={() => setShowNativeCamera(false)}
+          onLibrary={() => {setShowNativeCamera(false); InteractionManager.runAfterInteractions(() => void handleVideoSelection('library'));}}
           onRecord={(uri) => {
             setVideoUri(uri);
             setShowNativeCamera(false);
@@ -850,245 +503,28 @@ export const PhotoUploadScreen = () => {
         />
       </Modal>
 
-      <Modal visible={!!webCropImage} transparent animationType="slide">
-        {webCropImage && (
-          <WebCropModal 
-            imageUri={webCropImage.uri}
-            onCancel={() => setWebCropImage(null)} 
-            onCrop={(croppedUri) => {
-              const newPhotos = [...photos];
-              newPhotos[webCropImage.index] = croppedUri;
-              setPhotos(newPhotos);
-              setWebCropImage(null);
-            }} 
-          />
-        )}
-      </Modal>
+      {cropImage && <PhotoCropModal
+        key={cropImage.uri + cropImage.index}
+        appearance="onboarding"
+        initialAspectRatio={1}
+        imageUri={cropImage.uri}
+        onCancel={() => setCropImage(null)}
+        onSave={cropped => {
+          setPhotos(current => current.map((uri, index) => index === cropImage.index ? cropped.uri : uri));
+          setOriginalPhotos(current => current.map((uri, index) => index === cropImage.index ? cropImage.uri : uri));
+          setCropImage(null);
+          setProtectedPhotoIndex(null);
+          setPickerError('');
+        }}/>}
 
-    </SafeAreaView>
+      <LastPhotoWarningModal
+        appearance="onboarding"
+        visible={protectedPhotoIndex !== null && Boolean(photos[protectedPhotoIndex])}
+        imageUri={protectedPhotoIndex !== null ? photos[protectedPhotoIndex] || undefined : undefined}
+        onClose={() => setProtectedPhotoIndex(null)}
+        onReplace={() => { const index = protectedPhotoIndex; setProtectedPhotoIndex(null); if (index !== null) void pickImage(index); }}
+      />
+    </View>
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#0F1115",
-  },
-  headerNav: {
-    paddingHorizontal: 20,
-    paddingTop: Platform.OS === "ios" ? 10 : 45,
-    height: Platform.OS === "ios" ? 60 : 90,
-    justifyContent: "center",
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: 24,
-  },
-  title: {
-    fontSize: 40,
-    fontWeight: "800",
-    color: "#FFF",
-    lineHeight: 48,
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: "rgba(255,255,255,0.6)",
-    lineHeight: 24,
-    marginBottom: 32,
-  },
-  gridContainer: {
-    alignItems: 'center',
-    paddingBottom: 40,
-  },
-  heroSlot: {
-    width: '100%',
-    aspectRatio: 3/4,
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.2)',
-    borderStyle: 'dashed',
-    overflow: 'hidden',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  heroMedia: {
-    width: '100%',
-    height: '100%',
-  },
-  emptySlotContent: {
-    alignItems: 'center',
-  },
-  iconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#FFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  slotText: {
-    color: '#FFF',
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  slotSubtext: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 14,
-  },
-  removeBadge: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  videoControlsOverlay: {
-    position: 'absolute',
-    bottom: 12,
-    right: 12,
-    flexDirection: 'row',
-    gap: 8,
-  },
-  controlButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  photoGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    width: '100%',
-  },
-  photoSlot: {
-    width: '31%',
-    aspectRatio: 3/4,
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
-    borderStyle: 'dashed',
-    overflow: 'hidden',
-    marginBottom: 12,
-  },
-  photoMedia: {
-    width: '100%',
-    height: '100%',
-  },
-  emptyPhotoContent: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  removeBadgeSmall: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  footer: {
-    paddingHorizontal: 20,
-    paddingBottom: Platform.OS === "ios" ? 34 : 20,
-    paddingTop: 10,
-    backgroundColor: "#0F1115",
-  },
-  nextButton: {
-    backgroundColor: "#FFF",
-    height: 56,
-    borderRadius: 28,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  disabledButton: {
-    opacity: 0.5,
-  },
-  nextButtonText: {
-    color: "#0F1115",
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.85)",
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 40,
-  },
-  modalContent: {
-    backgroundColor: "#1C1C1E",
-    width: "100%",
-    borderRadius: 24,
-    padding: 30,
-    alignItems: "center",
-  },
-  modalTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: "#FFF",
-    textAlign: "center",
-    marginBottom: 10,
-  },
-  modalSubtitle: {
-    fontSize: 16,
-    color: "rgba(255,255,255,0.6)",
-    textAlign: "center",
-    lineHeight: 22,
-    marginBottom: 30,
-  },
-  modalPrimaryButton: {
-    backgroundColor: "#FFF",
-    width: "100%",
-    flexDirection: "row",
-    paddingVertical: 16,
-    borderRadius: 30,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 12,
-  },
-  modalPrimaryText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#000",
-  },
-  modalSecondaryButton: {
-    backgroundColor: "rgba(255,255,255,0.1)",
-    width: "100%",
-    flexDirection: "row",
-    paddingVertical: 16,
-    borderRadius: 30,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 12,
-  },
-  modalSecondaryText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#FFF",
-  },
-  modalCancelButton: {
-    paddingVertical: 10,
-    marginTop: 8,
-  },
-  modalCancelText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "rgba(255,255,255,0.4)",
-  },
-});
