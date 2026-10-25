@@ -1,0 +1,9 @@
+# Blocked accounts kitten: corrected paws
+
+Created with the built-in image_gen tool. Preserves the approved kitten face and raised paw. The user's lower-body reference determines the rounded paw shapes and placement on the ground.
+
+Asset: `apps/mobile/assets/illustrations/blocked-kitten-v2.png`.
+
+## Final edit prompt
+
+Use case: precise-object-edit. Image 1 is the edit target: the full ginger kitten with one raised stop paw. Image 2 is ONLY a reference for the lower-body pose and the shape and placement of grounded paws. Change only the lower foreleg and feet in Image 1 to match Image 2. The lowered foreleg on the viewer's right descends naturally beside the white chest and ends in a SMALL, compact, round front paw, resting flat on the ground slightly forward of the seated body. Show two small hind paws on the same ground level: one below the left haunch and one just behind and to the right of the grounded front paw. Use the reference's soft rounded white-fur toe shapes, compact foot size, gentle shallow toe separations and clear flat contact. Do not make long fingers, splayed toes, claw-like dark slits, visible red skin, oversized feet or extra paws. Exactly four limbs: one front paw raised unchanged, one front paw grounded, two hind paws grounded. Preserve Image 1's exact face, very large round amber eyes, expression, head tilt, nose, ears, raised paw and pink pads, upper body, orange fur, white chest, left-side curled tail, lighting, full-body portrait framing and illustration quality. Do not copy Image 2's tail placement or its cropped framing. No floor, shadows, backdrop, glow, text or checkerboard pattern. The checkerboard in Image 2 is not artwork; output genuine transparent alpha everywhere outside the kitten. Keep full feet and tail visible with a small clear margin.

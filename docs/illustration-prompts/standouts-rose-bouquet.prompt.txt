@@ -1,0 +1,21 @@
+Generator: OpenAI built-in image_gen.imagegen
+Selected output: Initial generation
+Reference: C:/Users/subha/AppData/Local/Temp/codex-clipboard-8431c86d-6bea-4cc9-a0d4-f47e664f1e71.png
+Selected source: C:\Users\subha\.codex\generated_images\01a10648-9530-7922-9246-049e825dff6b\exec-53557480-5e2f-4649-ad8f-f248912bd026.png
+Transparent background: true
+
+INITIAL PROMPT
+Create one finished editorial illustration asset for the About Standouts page of a dating app. Use the attached photograph only as a visual reference for the hand holding a symbolic bouquet. Do not reproduce the photograph, phone, page, interface, background, branding, or text.
+
+SUBJECT AND COMPOSITION:
+One natural human hand with coherent five-finger anatomy grips three thin flower stems. The arm enters from the lower-left, wearing a simple muted lavender sleeve with an ivory cuff. Above the hand, arrange three blooms: a solid dusty-pink heart-shaped bloom in the middle, a small five-point amber star-shaped flower on the left, and a clearly recognizable blush-pink rose on the right. Add a few small sage-green leaves. Show the whole hand, cuff, sleeve end, stems, and bouquet without cropping. Keep the drawing centred in a square canvas, with its silhouette occupying about 85 percent of the height. Use a compact, balanced composition that remains clear at a display size of 200 pixels.
+
+STYLE AND COLOUR:
+Minimal hand-drawn editorial line art, like the reference: clean flowing contours, slightly organic curves, simple flat pastel fills, and no 3D rendering. Use consistent warm pale-ivory outlines that remain visible against a warm near-black app background #100F0D. The hand fill is pale warm ivory with slightly darker fine finger contours. The sleeve is dusty lavender #8A809E. Heart and rose are muted blush and dusty pink. The star-shaped flower is soft warm amber. Leaves and stems are muted sage. Avoid black exterior outlines that disappear on a dark page. Limit detail to the folds of the fingers, rose petals, and a few cuff lines.
+
+OUTPUT:
+A single transparent PNG asset, 1254 by 1254 pixels, with true alpha transparency. Transparent background throughout the empty area. Opaque pastel fills inside the drawing. No text, letters, numbers, UI, frame, floor, shadow, glow, gradient, scattered sparkles, glitter, extra hands, or decorative background. The star is only one solid flower on a stem, never a glitter effect.
+
+REFINEMENT PROMPT (not selected; the initial output has cleaner edges)
+Refine this illustration asset only. Keep the same hand anatomy, grip, sleeve, bouquet composition, colours, flower shapes, and object positions. Remove all stray speckles, isolated coloured pixels, rough cutout fringes, and marks outside the illustration. Make the outer edges clean, smooth, antialiased curves with true alpha transparency. Keep a thin warm-ivory outline around the main shapes for contrast on #100F0D. Use mostly flat matte pastel fills with minimal shading, in a hand-drawn editorial style. Preserve all five natural fingers, the lavender sleeve, ivory cuff, heart bloom, single star-shaped flower, rose, sage leaves, and three stems. Do not add anything. No background, glow, shadow, sticker border, text, sparkles, or glitter. Return a 1254 by 1254 transparent PNG, with the whole illustration visible.
+

@@ -1,0 +1,13 @@
+Generator: built-in image_gen
+Reference: reminder-chat-3d-v1.png
+Transparent background: true
+Size: 1254 × 1254
+Used for: Re-verify (expired)
+
+GENERATION PROMPT
+Transparent PNG 3D illustration for a dark (near-black) dating app. Premium sculpted 3D, sculpted satin clay, all surfaces opaque and matte, rounded soft bevels, soft directional studio light with a gentle rim light so it reads on black, clear volume and small contact shadows between the objects only. Three-quarter front view, compact balanced cluster filling 85% of a square canvas, all parts fully visible. Palette: warm ivory, coral, rose pink, muted sage, mint, soft amber. No text, letters or numbers, no background, no floor, no platform, no card, no glass, no metal, no sparkles, no glow, no watermark. Must read clearly at 40px and at 240px.
+
+Subject: An ivory desk calendar with a coral binding ring and a blank page, a chunky sage circular refresh arrow wrapping around its corner.
+
+Input image 1 is the style reference only. Match its sculpted forms, lighting and material finish. Deliver one square PNG, 1254 × 1254 pixels, with a true transparent background. Keep all objects inside the canvas. No glow, haze, aura or external drop shadow. Contact shadows between objects only.
+Edge quality: do not reproduce stray pixels, white fringe, coloured flecks, grain or cutout artefacts from the reference. Background pixels must be fully transparent. Leave clean transparent padding on every edge. The complete object cluster must fit within the central 85% of the canvas.

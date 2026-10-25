@@ -1,0 +1,13 @@
+Generator: built-in image_gen
+Reference: likes-you-kitten.png
+Transparent background: true
+Size: 1254 × 1254
+Used for: Out-of-likes deck card
+
+GENERATION PROMPT
+Input image 1 is the character identity and rendering reference. Create a new full-body illustration of this SAME orange and cream baby tabby kitten: large round warm brown eyes, white muzzle, tiny pink nose, tabby forehead markings, pink inner ears, fluffy fur, baby proportions, high-detail soft 3D storybook rendering. The kitten is curled up asleep on a big soft rose-pink heart-shaped cushion, eyes peacefully closed, tiny smile, one paw over the edge, tail curled around. A small round soft-amber alarm clock sits beside the cushion. Whole kitten, cushion and clock visible with clean padding. Square, centered. Soft studio light with gentle rim light for a dark interface. True transparent background, no floor, no frame, no text, no numbers on the clock, no glow, no watermark.
+
+Output: one 1254 × 1254 PNG with a true transparent background. Keep the subject within 80–85% of the canvas.
+
+EDIT PROMPT
+Edit this illustration only. Preserve every subject, pose, expression, object arrangement, colour palette, proportions, sculpted surfaces and lighting. Remove all glow, haze, aura and drop shadow around the object. Remove every stray white or coloured fleck, grainy fringe, speck and detached cutout artefact outside the subjects. Keep only the objects with clean alpha edges. Everything else fully transparent, including internal gaps. Preserve natural fine fur and whisker edges on kittens. Do not add an outline or a hard coloured fringe. Keep soft contact shadows between touching objects only. Reduce the full cluster slightly so it fits within the central 85% of the square, with at least 7.5% fully transparent padding on all four sides. Output exactly one 1254 × 1254 PNG with true alpha transparency. No text, background, floor, platform, glow or watermark.

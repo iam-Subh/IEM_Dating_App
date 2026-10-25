@@ -1,0 +1,8 @@
+# Welcome love and chat illustration
+
+Created with the built-in imagegen tool. Transparent PNG.
+Used on the first welcome page over the existing painted heart.
+
+## Prompt
+
+Use case: stylized-concept. Create a transparent PNG hero illustration for a dating app welcome page. A polished 3D clay composition that communicates conversation leading to love: one large red heart floating at the front center, with two rounded speech bubbles behind it, one muted lavender on the left and one soft blush pink on the right. The left bubble sits a little higher, right bubble a little lower; their short tails point toward the center. Each bubble has three small recessed dots. The central heart is plump and sculptural with an organic heart silhouette, coral-red #EE4568 main surface and subtle rose-pink highlights. Match high-quality rounded 3D hobby object illustrations: tactile smooth ceramic or soft clay, realistic rounded bevels, subtle material grain, soft studio highlights, soft self shadows, restrained gloss. Three distinct readable objects with some overlap, no clutter. Composition occupies roughly 85% width and 80% height of a square image; leave transparent margins. Light from upper left, cool violet rim light on right. Palette red, rose pink, muted lavender; no green, cream or yellow objects. No people, no faces, no words, no logos, no phones, no floor, no cast shadow outside the objects, no background panel. True transparent background. This will be placed over a separate painted pink-red heart outline on a dark plum gradient; do not include a painted stroke, ring, outline heart or ribbon in the generated image. The solid heart and speech bubbles must remain legible when rendered 240 pixels wide.

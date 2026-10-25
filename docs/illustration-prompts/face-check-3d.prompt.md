@@ -1,0 +1,5 @@
+Generated with the built-in image generation tool.
+
+Use case: stylized-concept
+Asset type: transparent 3D illustration for a mobile face verification introduction.
+Primary request: one friendly stylized adult face and upper shoulders centered inside an upright rounded rectangular face-scan frame, with a small shield beside the lower right corner. The shield is a privacy symbol with a tiny padlock, not a verification checkmark. Gender-neutral adult character, warm medium brown skin, short dark plum hair, calm expression, small smiling mouth, realistic symmetrical eyes, rose clay shirt. Sculpted smooth matte clay 3D render, soft studio lighting and clean rounded geometry. The frame is pale blush pink with deep plum scan corner accents. Colors: deep plum #712C48, dusty rose, muted lavender, warm cream. Entire head, shoulders, frame and shield fully visible, with generous transparent margin and a centered compact square composition. No surrounding background, no pedestal, no text, no typography, no numbers, no watermark, no decorative hearts, no sparkles, no cyan or blue. Actual transparent background. Designed to be legible at 180 pixels tall.

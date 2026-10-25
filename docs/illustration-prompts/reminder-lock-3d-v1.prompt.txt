@@ -1,0 +1,16 @@
+Generator: built-in image_gen
+Reference: reminder-chat-3d-v1.png
+Transparent background: true
+Size: 1254 × 1254
+Used for: Locked chat bar, attachments
+
+GENERATION PROMPT
+Transparent PNG 3D illustration for a dark (near-black) dating app. Premium sculpted 3D, sculpted satin clay, all surfaces opaque and matte, rounded soft bevels, soft directional studio light with a gentle rim light so it reads on black, clear volume and small contact shadows between the objects only. Three-quarter front view, compact balanced cluster filling 85% of a square canvas, all parts fully visible. Palette: warm ivory, coral, rose pink, muted sage, mint, soft amber. No text, letters or numbers, no background, no floor, no platform, no card, no glass, no metal, no sparkles, no glow, no watermark. Must read clearly at 40px and at 240px.
+
+Subject: A small chunky ivory padlock with a rounded coral shackle and a visible keyhole, a little mint speech bubble behind it.
+
+Input image 1 is the style reference only. Match its sculpted forms, lighting and material finish. Deliver one square PNG, 1254 × 1254 pixels, with a true transparent background. Keep all objects inside the canvas. No glow, haze, aura or external drop shadow. Contact shadows between objects only.
+Edge quality: do not reproduce stray pixels, white fringe, coloured flecks, grain or cutout artefacts from the reference. Background pixels must be fully transparent. Leave clean transparent padding on every edge. The complete object cluster must fit within the central 85% of the canvas.
+
+EDIT PROMPT
+Edit this illustration only. Preserve every subject, pose, expression, object arrangement, colour palette, proportions, sculpted surfaces and lighting. Remove all glow, haze, aura and drop shadow around the object. Remove every stray white or coloured fleck, grainy fringe, speck and detached cutout artefact outside the subjects. Keep only the objects with clean alpha edges. Everything else fully transparent, including internal gaps. Preserve natural fine fur and whisker edges on kittens. Do not add an outline or a hard coloured fringe. Keep soft contact shadows between touching objects only. Reduce the full cluster slightly so it fits within the central 85% of the square, with at least 7.5% fully transparent padding on all four sides. Output exactly one 1254 × 1254 PNG with true alpha transparency. No text, background, floor, platform, glow or watermark.

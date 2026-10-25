@@ -1,0 +1,10 @@
+Generator: built-in image_gen
+Reference: codex-clipboard-e0fe097b-68d9-4714-b0c3-4328cd4a6ad5.png
+Transparent background: true
+
+Use case: stylized-concept
+Asset type: transparent illustration for the Likes You page of a dating app.
+Input image 1 is the character identity and rendering reference. Create a new full-body illustration of this SAME orange and cream baby tabby kitten. Preserve its recognizable face: large round warm brown eyes, white muzzle and cheeks, tiny pink nose, tabby forehead markings, pink inner ears, fine fluffy fur and baby proportions. Preserve the high-detail soft 3D storybook rendering.
+The kitten sits facing the viewer, with the entire body, both hind paws with pink pads, ears and curled tail visible. Give it a gentle delighted smile, a slight head tilt, and front paws holding one small soft pink heart at its chest.
+Surround the kitten with floating love hearts and roses: four small rounded pink/coral hearts and two recognizable pink rose flowers with short green stems. Arrange them in a loose airy arc around its head and shoulders with clear gaps. Keep every floating object separate from the face and body. The kitten is the main subject, much larger than the floating objects. All objects and the full kitten must fit inside the image with clean padding.
+Square composition, centered, compact enough to remain readable in a mobile empty state. Soft studio light. Actual transparent background with alpha, including gaps between objects. No background, no floor, no frame, no text, no watermark, no extra characters, no sparkle icons, no colored outline or glow.

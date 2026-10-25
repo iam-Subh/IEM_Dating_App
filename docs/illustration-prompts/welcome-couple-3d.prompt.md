@@ -1,0 +1,5 @@
+# Welcome couple illustration
+
+Mode: built-in image generation. Transparent background.
+
+Use case: stylized-concept. Asset type: transparent mobile dating app welcome illustration. Create a polished 3D clay illustration of two young adult South Asian people, a man and a woman, waist-up facing each other, smiling warmly with gentle eye contact, hands joined around a small red heart between them. Woman has shoulder-length dark hair and rose pink sweater. Man has short dark hair and warm ivory shirt. Soft rounded sculpted forms, tasteful contemporary 3D ceramic toy style, adult proportions, expressive natural faces, clean anatomy and hands. Pink, warm cream, red and burgundy palette; no blue or lavender. Soft studio lighting, matte clay with subtle satin highlights. Compact centered composition that reads clearly at mobile size, both people fully visible from waist up, small red heart central. Actual transparent background, no environment, no frame, no text, no logos, no watermark, no painted stroke, no chat bubbles. Fill most of square canvas with generous clean outer margins.

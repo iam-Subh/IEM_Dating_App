@@ -1,0 +1,7 @@
+Generator: built-in image_gen
+Reference: likes-you-kitten.png
+Transparent background: true
+
+Use case: identity-preserve
+Edit the attached Likes You kitten illustration. Change ONLY the kitten's facial expression from a quiet gentle expression to clearly excited, joyful delight: a small open-mouth happy smile with a tiny pink tongue, bright lively brown eyes with lifted upper lids, raised cheeks, and an eager expression. Make the excitement readable at small mobile UI size without making the mouth excessively large or the expression frightened or surprised.
+Keep the exact same recognizable kitten identity, orange tabby markings, white muzzle and cheeks, pink nose, eye color, fine fluffy fur, ears, slight head tilt, full seated body, paws holding a pink heart, hind paw pads, curled tail, all four floating hearts and both floating roses, their placement, lighting, rendering style, scale, and square framing unchanged. Preserve the actual transparent background and alpha. No new objects, no text, no watermark, no colored outline.

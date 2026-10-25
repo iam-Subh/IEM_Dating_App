@@ -1,0 +1,10 @@
+Generator: built-in image_gen
+Reference: likes-you-kitten.png
+Transparent background: true
+Size: 1254 × 1254
+Used for: Paused deck card
+
+GENERATION PROMPT
+Input image 1 is the character identity and rendering reference. Create a new full-body illustration of this SAME orange and cream baby tabby kitten (same face, eyes, markings, fur and soft 3D storybook rendering). The kitten sits facing the viewer and covers its eyes with both front paws, peeking through a small gap with one eye, playful and shy - meaning "nobody can see me right now". A small ivory pause symbol made of two rounded satin bars stands beside it. Whole kitten visible including hind paws and tail, clean padding. Square, centered. Soft studio light with gentle rim light for a dark interface. True transparent background, no floor, no frame, no text, no glow, no watermark.
+
+Output: one 1254 × 1254 PNG with a true transparent background. Keep the subject within 80–85% of the canvas.
