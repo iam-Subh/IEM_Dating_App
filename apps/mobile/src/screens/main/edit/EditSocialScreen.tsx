@@ -1,13 +1,17 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Animated, ScrollView, Alert, TextInput, Dimensions, KeyboardAvoidingView, Platform } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
-import { EditScreenHeader } from '../../../components/EditScreenHeader';
-import { api } from '../../../services/api';
-import { useDispatch } from 'react-redux';
-import { updateUser } from '../../../store/authSlice';
+import {EditSaveFooter} from '../../../components/EditSaveFooter';
+import {EditTapChoice} from '../../../components/ProfileEditDesign';
+import {Ionicons} from '@expo/vector-icons';
+import {SocialArt} from '../../../features/auth/onboarding/OnboardingFormArtwork';
+import {FormTitle, FormSheet, formStyles, f} from '../../../components/ProfileEditForms';
 
-const { width } = Dimensions.get('window');
-const CLUBS = ['Robotics', 'Tech/Coding', 'Music/Band', 'Dance', 'Drama', 'Sports', 'Photography', 'Debate'];
+import React, {useEffect, useRef, useState} from 'react';
+import {View, Text, ScrollView, Alert, TextInput, Keyboard, KeyboardAvoidingView, Platform} from 'react-native';
+import {useNavigation, useRoute} from '@react-navigation/native';
+import {EditScreenHeader} from '../../../components/EditScreenHeader';
+import {ClubSelectionGrid} from '../../../components/ClubSelectionGrid';
+import {api} from '../../../services/api';
+import {useDispatch} from 'react-redux';
+import {updateUser} from '../../../store/authSlice';
 
 export const EditSocialScreen = () => {
   const navigation = useNavigation<any>();
@@ -18,28 +22,24 @@ export const EditSocialScreen = () => {
   const [selectedClubs, setSelectedClubs] = useState<string[]>(currentClubs || []);
   const [hangoutSpot, setHangoutSpot] = useState(currentHangoutSpot || '');
   const [saving, setSaving] = useState(false);
-
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(30)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
-      Animated.spring(slideAnim, { toValue: 0, friction: 8, useNativeDriver: true }),
-    ]).start();
-  }, []);
-
-  const toggleClub = (club: string) => {
-    if (selectedClubs.includes(club)) setSelectedClubs(selectedClubs.filter(c => c !== club));
-    else if (selectedClubs.length < 5) setSelectedClubs([...selectedClubs, club]);
+  const placeInput = useRef<TextInput>(null);
+  const blurPlaceInput = () => {
+    placeInput.current?.blur();
+    Keyboard.dismiss();
   };
 
-  const handleSave = async () => {
+  useEffect(() => {
+    if (route.params?.clubSelection) setSelectedClubs(route.params.clubSelection);
+  }, [route.params?.clubSelection]);
+
+
+const handleSave = async () => {
     setSaving(true);
     try {
       const data: any = { clubs: selectedClubs };
       if (hangoutSpot) data.hangoutSpots = [hangoutSpot];
       const response = await api.put('/profile', data);
+      if (!response.data?.success) throw new Error(response.data?.message || 'Could not save your changes.');
       if (response.data?.success) dispatch(updateUser(response.data.data));
       navigation.goBack();
     } catch (err: any) {
@@ -47,9 +47,13 @@ export const EditSocialScreen = () => {
     } finally { setSaving(false); }
   };
 
-  return (
-    <View style={styles.container}>
-      <EditScreenHeader 
+  const [clubsOpen, setClubsOpen] = useState(false);
+  const openClubs = () => {
+    if (Platform.OS === 'web') setClubsOpen(true);
+    else navigation.navigate('ProfileClubSelection', {selectedClubs, returnKey: route.key});
+  };
+  return <View style={formStyles.page} onTouchStart={blurPlaceInput}>
+    <EditScreenHeader 
         title="Social & Vibes" 
         onCancel={() => navigation.goBack()} 
         onSave={handleSave} 
@@ -60,79 +64,23 @@ export const EditSocialScreen = () => {
           hangoutSpot !== (currentHangoutSpot || '')
         }
       />
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
-        style={{ flex: 1 }}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 100 : 0}
-      >
-        <Animated.View style={[styles.content, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-          <ScrollView 
-            showsVerticalScrollIndicator={false} 
-            contentContainerStyle={styles.scrollContent}
-            keyboardShouldPersistTaps="handled"
-          >
-            <Text style={styles.title}>Social & Vibes</Text>
-            <Text style={styles.subtitle}>Relatable IEM things to start the conversation.</Text>
-
-            <Text style={styles.sectionLabel}>IEM Clubs (Max 5)</Text>
-            <View style={styles.chipsContainer}>
-              {CLUBS.map(club => (
-                <TouchableOpacity key={club} style={[styles.chip, selectedClubs.includes(club) && styles.chipSelected]} onPress={() => toggleClub(club)} activeOpacity={0.7}>
-                  <Text style={[styles.chipText, selectedClubs.includes(club) && styles.chipTextSelected]}>{club}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <Text style={[styles.sectionLabel, { marginTop: 15 }]}>Favorite Spot For Dating</Text>
-            <View style={styles.inputContainer}>
-              <TextInput 
-                style={styles.input} 
-                placeholder="e.g. RDB chai stall or CCD"
-                placeholderTextColor="rgba(255,255,255,0.3)" 
-                value={hangoutSpot} 
-                onChangeText={setHangoutSpot} 
-                multiline
-                numberOfLines={2}
-                maxLength={100}
-                textAlignVertical="top"
-              />
-            </View>
-            <View style={{ height: 100 }} />
-          </ScrollView>
-        </Animated.View>
-      </KeyboardAvoidingView>
-    </View>
-  );
+    <KeyboardAvoidingView style={formStyles.body} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <ScrollView keyboardShouldPersistTaps="never" keyboardDismissMode="on-drag" showsVerticalScrollIndicator={false} contentContainerStyle={formStyles.content} pointerEvents={saving ? 'none' : 'auto'}>
+      
+      <FormTitle>{'Life beyond\nthe classroom.'}</FormTitle>
+      <Text style={[f.choiceLabel, {marginTop: 22, marginBottom: 10}]}>Your college clubs</Text>
+      <EditTapChoice disabled={saving} onPress={openClubs} style={f.field}><View style={f.flex}><Text style={f.choiceLabel}>{selectedClubs.length ? 'Edit clubs' : 'Add a club'}</Text><Text style={f.detail}>{selectedClubs.length ? selectedClubs.length + ' selected' : 'Choose up to 5.'}</Text></View><Ionicons name="add-circle-outline" size={28} color="#F3C1CA"/></EditTapChoice>
+      <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 8}}>{selectedClubs.map(club => <EditTapChoice key={club} disabled={saving} accessibilityLabel={'Remove ' + club} onPress={() => setSelectedClubs(selectedClubs.filter(value => value !== club))} style={{minHeight: 40, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, backgroundColor: '#3B2933', flexDirection: 'row', alignItems: 'center', gap: 7}}><Text style={f.link}>{club}</Text><Ionicons name="close" size={14} color="#F3C1CA"/></EditTapChoice>)}</View>
+      <Text style={[f.choiceLabel, {marginTop: selectedClubs.length ? 12 : 4, marginBottom: 10}]}>Find me at…</Text>
+      <View onTouchStart={event => event.stopPropagation()} style={[f.field, {height: 104, overflow: 'hidden'}]}><View pointerEvents="none" style={{width: 58, height: 62}}><SocialArt kind={4}/></View><View style={[f.flex, {minWidth: 0}]}><TextInput ref={placeInput} accessibilityLabel="Place name" value={hangoutSpot} onChangeText={setHangoutSpot} editable={!saving} placeholder="A café, canteen, or favourite spot." placeholderTextColor="#9D958F" maxLength={100} multiline scrollEnabled textAlignVertical="top" style={[f.fieldValue, {height: 50, paddingVertical: 2}]}/></View></View>
+      {Platform.OS === 'web' && <FormSheet visible={clubsOpen} title="Your college clubs" onClose={() => setClubsOpen(false)}><ClubSelectionGrid selected={selectedClubs} onChange={setSelectedClubs} disabled={saving} lightCards compactHeading/></FormSheet>}
+    </ScrollView>
+    </KeyboardAvoidingView>
+    <EditSaveFooter onSave={handleSave} saving={saving}
+      hasUnsavedChanges={
+        selectedClubs.length !== (currentClubs || []).length ||
+        selectedClubs.some(c => !(currentClubs || []).includes(c)) ||
+        hangoutSpot !== (currentHangoutSpot || '')
+      }/>
+  </View>;
 };
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0F1115' },
-  content: { flex: 1 },
-  scrollContent: { padding: 20, paddingBottom: 40 },
-  title: { fontSize: 30, fontWeight: '800', color: '#FFF', marginBottom: 12 },
-  subtitle: { fontSize: 15, color: 'rgba(255,255,255,0.6)', lineHeight: 22, marginBottom: 24 },
-  sectionLabel: { fontSize: 14, fontWeight: '700', color: '#F94E27', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 15 },
-  chipsContainer: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -5 },
-  chip: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.2)', margin: 5, backgroundColor: 'rgba(255,255,255,0.03)' },
-  chipSelected: { borderColor: '#F94E27', backgroundColor: 'rgba(249, 78, 39, 0.15)' },
-  chipText: { color: 'rgba(255,255,255,0.7)', fontSize: 15, fontWeight: '600' },
-  chipTextSelected: { color: '#FFF' },
-  inputContainer: { 
-    backgroundColor: 'rgba(255,255,255,0.05)', 
-    borderRadius: 12, 
-    borderWidth: 1.5, 
-    borderColor: 'rgba(255,255,255,0.1)', 
-    paddingHorizontal: 15,
-    paddingVertical: 2,
-  },
-  input: { 
-    minHeight: 72,
-    maxHeight: 96,
-    color: '#FFF', 
-    fontSize: 15,
-    lineHeight: 21,
-    paddingVertical: 13,
-    includeFontPadding: false,
-    textAlignVertical: 'top',
-  },
-});

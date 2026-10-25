@@ -1,51 +1,60 @@
-import React, { useState, useRef, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Animated,
-  Alert,
-} from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
-import { EditScreenHeader } from '../../../components/EditScreenHeader';
-import { api } from '../../../services/api';
-import { useDispatch } from 'react-redux';
-import { updateUser } from '../../../store/authSlice';
+import {EditSaveFooter} from '../../../components/EditSaveFooter';
+import {FormTitle, FormChoice, formStyles, f} from '../../../components/ProfileEditForms';
+import {ScrollView} from 'react-native';
 
-const collegeOptions = [
-  "Institute Of Engineering and Managment,Kolkata",
-  "University of Engineering and Managment,Newtown",
-  "University of Engineering and Managment,Jaipur",
-];
+import React, {useState, useEffect} from 'react';
+import {View, Text, Alert, ActivityIndicator} from 'react-native';
+import {useNavigation} from '@react-navigation/native';
+import {useDispatch, useSelector} from 'react-redux';
+import {EditScreenHeader} from '../../../components/EditScreenHeader';
+import {api} from '../../../services/api';
+import {updateUser} from '../../../store/authSlice';
+import type {RootState} from '../../../store';
+import {VerifiedBadge} from '../../../features/discovery/components/VerifiedBadge';
+import {ReminderRow} from '../../../features/verification/ReminderParts';
+import {ReminderArt} from '../../../features/verification/ReminderArt';
+import {refreshVerificationStatus, useVerificationStatus} from '../../../features/verification/useVerificationStatus';
+
+/**
+ * Edit profile > College (features/auth/GOOGLE_SIGNUP_PLAN.md 1.3, reminder 24).
+ *
+ * A verified college comes from the college email and is shown with the
+ * tick, not edited here. An unverified account chooses its college from the
+ * list - shown on its card without the tick - with Verify beside it.
+ */
+type Institution = { id: string; name: string };
 
 export const EditCollegeScreen = () => {
   const navigation = useNavigation<any>();
-  const route = useRoute<any>();
   const dispatch = useDispatch();
-  const { currentCollege } = route.params || {};
-
-  const [selected, setSelected] = useState<string | null>(currentCollege || null);
+  const status = useVerificationStatus();
+  const user = useSelector((state: RootState) => state.auth.user);
+  const [institutions, setInstitutions] = useState<Institution[] | null>(null);
+  const [selected, setSelected] = useState<string | null>(user?.claimedInstitutionId ?? null);
   const [saving, setSaving] = useState(false);
-
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(30)).current;
+  const verified = !!status?.verified;
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
-      Animated.spring(slideAnim, { toValue: 0, friction: 8, useNativeDriver: true }),
-    ]).start();
+    api.get('/verification/institutions')
+      .then((response) => {
+        const list = response.data.data as Institution[];
+        setInstitutions(list);
+        // Older accounts kept only the college's name.
+        if (!selected) setSelected(list.find((entry) => entry.name === user?.college)?.id ?? null);
+      })
+      .catch(() => setInstitutions([]));
   }, []);
 
+  const current = user?.claimedInstitutionId ?? institutions?.find((entry) => entry.name === user?.college)?.id ?? null;
+
   const handleSave = async () => {
-    if (!selected) return;
+    if (!selected || verified) return;
     setSaving(true);
     try {
-      const response = await api.put('/profile', { college: selected });
-      if (response.data?.success) {
-        dispatch(updateUser(response.data.data));
-      }
+      const response = await api.put('/profile', { institutionId: selected });
+      if (!response.data?.success) throw new Error(response.data?.message || 'Could not save your changes.');
+      if (response.data?.success) dispatch(updateUser({ ...response.data.data, claimedInstitutionId: selected }));
+      void refreshVerificationStatus();
       navigation.goBack();
     } catch (err: any) {
       Alert.alert('Error', err.response?.data?.message || 'Failed to update');
@@ -54,54 +63,32 @@ export const EditCollegeScreen = () => {
     }
   };
 
-  return (
-    <View style={styles.container}>
-      <EditScreenHeader 
-        title="College" 
-        onCancel={() => navigation.goBack()} 
-        onSave={handleSave} 
-        saving={saving} 
-        saveDisabled={!selected}
-        hasUnsavedChanges={selected !== null && selected !== (currentCollege || null)}
+  return <View style={formStyles.page}>
+    <EditScreenHeader
+        title="College"
+        onCancel={() => navigation.goBack()}
+        onSave={handleSave}
+        saving={saving}
+        saveDisabled={verified || !selected}
+        hasUnsavedChanges={!verified && selected !== null && selected !== current}
       />
-      <Animated.View style={[styles.content, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-        <Text style={styles.title}>If studying is your thing...</Text>
-        <Text style={styles.subtitle}>This is how it'll appear on your profile.</Text>
-
-        {collegeOptions.map((college) => (
-          <TouchableOpacity
-            key={college}
-            style={[styles.collegeItem, selected === college && styles.collegeItemSelected]}
-            onPress={() => setSelected(college)}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.collegeText, selected === college && styles.collegeTextSelected]}>{college}</Text>
-            <View style={[styles.radioButton, selected === college && styles.radioButtonSelected]}>
-              {selected === college && <View style={styles.radioInner} />}
-            </View>
-          </TouchableOpacity>
-        ))}
-      </Animated.View>
-    </View>
-  );
+    <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={formStyles.content} pointerEvents={saving ? 'none' : 'auto'}>
+      
+      <FormTitle center subtitle={verified ? 'Confirmed by your college email.' : undefined}>{'Where do you\nstudy?'}</FormTitle>
+      <View style={{marginTop: 24}}>
+      {verified ? <View style={f.choice}><Text style={[f.choiceLabel, f.flex]}>{user?.college}</Text><VerifiedBadge size={20}/></View> : !institutions ? <ActivityIndicator color="#F3C1CA"/> : institutions.map(college => <FormChoice key={college.id} label={college.name} checked={selected === college.id} disabled={saving} onPress={() => setSelected(college.id)}/>)}
+      </View>
+      {!verified && <View style={{marginTop: 18}}><ReminderRow flush tone={status?.expired ? 'warn' : 'neutral'}
+        leading={<ReminderArt name={status?.expired ? 'renew' : 'badge'} size={42}/>}
+        title={status?.expired ? 'Renew your college verification' : 'Verify your college email'}
+        subtitle={status?.expired ? 'Your verification has ended.' : 'Step 1 of your blue badge.'}
+        value={status?.expired ? 'Re-verify' : 'Verify'} onPress={() => navigation.navigate('VerifyCollege')}/></View>}
+    </ScrollView>
+  <EditSaveFooter
+      onSave={handleSave}
+      saving={saving}
+      saveDisabled={verified || !selected}
+      hasUnsavedChanges={!verified && selected !== null && selected !== current}
+    />
+  </View>;
 };
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0F1115' },
-  content: { flex: 1, padding: 20 },
-  title: { fontSize: 30, fontWeight: '800', color: '#FFF', marginBottom: 8 },
-  subtitle: { fontSize: 15, color: 'rgba(255,255,255,0.6)', marginBottom: 24 },
-  collegeItem: {
-    paddingVertical: 16, flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)',
-  },
-  collegeItemSelected: {},
-  collegeText: { fontSize: 16, color: '#FFF', flex: 1, marginRight: 10 },
-  collegeTextSelected: { fontWeight: '700' },
-  radioButton: {
-    width: 22, height: 22, borderRadius: 11, borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.3)', alignItems: 'center', justifyContent: 'center',
-  },
-  radioButtonSelected: { borderColor: '#F94E27' },
-  radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#F94E27' },
-});

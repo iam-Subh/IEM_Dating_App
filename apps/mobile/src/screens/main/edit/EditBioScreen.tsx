@@ -1,10 +1,15 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, Animated, Alert, KeyboardAvoidingView, Platform, TouchableOpacity, ScrollView } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
-import { EditScreenHeader } from '../../../components/EditScreenHeader';
-import { api } from '../../../services/api';
-import { useDispatch } from 'react-redux';
-import { updateUser } from '../../../store/authSlice';
+import {EditSaveFooter} from '../../../components/EditSaveFooter';
+import {Ionicons} from '@expo/vector-icons';
+import {ConversationArt} from '../../../features/auth/onboarding/OnboardingFormArtwork';
+import {FormTitle, formStyles, f} from '../../../components/ProfileEditForms';
+import {EditTapChoice as TouchableOpacity} from '../../../components/ProfileEditDesign';
+import React, {useState} from 'react';
+import {View, Text, TextInput, Alert, KeyboardAvoidingView, Platform, ScrollView} from 'react-native';
+import {useNavigation, useRoute} from '@react-navigation/native';
+import {EditScreenHeader} from '../../../components/EditScreenHeader';
+import {api} from '../../../services/api';
+import {useDispatch} from 'react-redux';
+import {updateUser} from '../../../store/authSlice';
 
 export const EditBioScreen = () => {
   const navigation = useNavigation<any>();
@@ -15,20 +20,12 @@ export const EditBioScreen = () => {
   const [bio, setBio] = useState(currentBio || '');
   const [saving, setSaving] = useState(false);
 
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(30)).current;
 
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
-      Animated.spring(slideAnim, { toValue: 0, friction: 8, useNativeDriver: true }),
-    ]).start();
-  }, []);
-
-  const handleSave = async () => {
+const handleSave = async () => {
     setSaving(true);
     try {
       const response = await api.put('/profile', { preferences: { bio: bio.trim() } });
+      if (!response.data?.success) throw new Error(response.data?.message || 'Could not save your changes.');
       if (response.data?.success) dispatch(updateUser(response.data.data));
       navigation.goBack();
     } catch (err: any) {
@@ -36,49 +33,31 @@ export const EditBioScreen = () => {
     } finally { setSaving(false); }
   };
 
-  return (
-    <View style={styles.container}>
-      <EditScreenHeader 
+
+  return <View style={formStyles.page}>
+    <EditScreenHeader 
         title="About Me" 
         onCancel={() => navigation.goBack()} 
         onSave={handleSave} 
         saving={saving} 
         hasUnsavedChanges={bio !== (currentBio || '')}
       />
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ flexGrow: 1 }} keyboardShouldPersistTaps="handled">
-          <Animated.View style={[styles.content, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-            <Text style={styles.title}>Share more about yourself</Text>
-            <Text style={styles.subtitle}>Write a bio to help your profile stand out.</Text>
-
-            <View style={[styles.bioCard, bio.length > 0 && styles.bioCardFilled]}>
-              <Text style={styles.bioLabel}>About me</Text>
-              <TextInput
-                multiline
-                style={styles.bioInput}
-                placeholder="Introduce yourself to make a strong impression."
-                placeholderTextColor="rgba(255,255,255,0.4)"
-                value={bio}
-                onChangeText={setBio}
-                maxLength={500}
-              />
-              <Text style={styles.charCount}>{bio.length}/500</Text>
-            </View>
-          </Animated.View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </View>
-  );
+    <KeyboardAvoidingView style={formStyles.body} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={formStyles.content} pointerEvents={saving ? 'none' : 'auto'}>
+      
+      <FormTitle art={<ConversationArt/>}>{'A little more\nabout you.'}</FormTitle>
+      <View style={{height: 222, marginTop: 24, paddingHorizontal: 18, paddingTop: 18, paddingBottom: 10, borderRadius: 24, backgroundColor: '#242321', overflow: 'hidden'}}>
+        <TextInput accessibilityLabel="About me" editable={!saving} multiline scrollEnabled maxLength={500} value={bio} onChangeText={setBio} placeholder="What would someone enjoy knowing about you?" placeholderTextColor="#9D958F" selectionColor="#F3C1CA" textAlignVertical="top" autoCapitalize="sentences" style={{height: 144, padding: 0, fontFamily: 'DMSans_400Regular', fontSize: 17, lineHeight: 26, color: '#FAF7F2'}}/>
+        <View style={[f.row, {justifyContent: 'space-between', marginTop: 32}]}><Text style={[f.note, {fontSize: 10}]}>Visible on your profile</Text><Text style={[f.note, {fontSize: 10}]}>{bio.length}/500</Text></View>
+      </View>
+      <Text style={[f.choiceLabel, {fontSize: 13, marginTop: 22, marginBottom: 10}]}>Need a starting point?</Text>
+      <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 8}}>{['My perfect Sunday…', 'Ask me about…', 'Together, we could…'].map((starter,index) => <TouchableOpacity key={starter} disabled={saving || !!bio.trim()} onPress={() => setBio(starter + ' ')} style={{minHeight: 42, borderRadius: 24, paddingHorizontal: 13, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: '#3B2933', opacity: bio.trim() ? 0.45 : 1}}><Ionicons name={(['sunny-outline', 'chatbubble-outline', 'heart-outline'] as const)[index]} size={15} color="#F3C1CA"/><Text style={f.link}>{starter}</Text></TouchableOpacity>)}</View>
+    </ScrollView>
+    </KeyboardAvoidingView>
+  <EditSaveFooter
+      onSave={handleSave}
+      saving={saving}
+      hasUnsavedChanges={bio !== (currentBio || '')}
+    />
+  </View>;
 };
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0F1115' },
-  content: { flex: 1, padding: 20 },
-  title: { fontSize: 30, fontWeight: '800', color: '#FFF', marginBottom: 12 },
-  subtitle: { fontSize: 15, color: 'rgba(255,255,255,0.6)', lineHeight: 22, marginBottom: 30 },
-  bioCard: { backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 20, padding: 24, borderWidth: 2, borderColor: 'rgba(255,255,255,0.15)', minHeight: 180 },
-  bioCardFilled: { borderColor: 'rgba(255,255,255,0.25)' },
-  bioLabel: { fontSize: 20, fontWeight: '800', color: '#FFF', marginBottom: 12 },
-  bioInput: { fontSize: 16, color: '#FFF', lineHeight: 24, paddingTop: 0, minHeight: 80, textAlignVertical: 'top' },
-  charCount: { fontSize: 12, color: 'rgba(255,255,255,0.3)', textAlign: 'right', marginTop: 8 },
-});
