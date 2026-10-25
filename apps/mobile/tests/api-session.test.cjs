@@ -13,6 +13,7 @@ function harness() {
   let stored = 'refresh-a';
   const actions = [];
   const retries = [];
+  let locationResets = 0;
   const api = Object.assign((config) => { retries.push(request(config)); return Promise.resolve('retried'); }, {
     post: () => refresh(),
     interceptors: {
@@ -30,17 +31,27 @@ function harness() {
       if (name === 'axios') return { create: () => api };
       if (name === '../store') return { store };
       if (name === 'react-native') return { Platform: { OS: 'android' } };
-      if (name === '../store/authSlice') return { setAccessToken: (token) => ({ token }) };
+      if (name === './deviceInfo') return { DEVICE_INFO_HEADER: '{}' };
+      if (name === '../store/authSlice') return { setAccessToken: (token) => ({ token }), logout: () => ({ type: 'logout' }) };
       if (name === './credentialStore') return { credentialStore: {
         getRefreshToken: async () => stored,
         rotateRefreshToken: async (expected, value, valid) => { assert.ok(valid()); assert.equal(expected, stored); stored = value; },
+        clear: async () => { stored = null; },
       } };
+      if (name === './socket') return { disconnectSocket: () => undefined };
+      if (name === './offlineQueue') return { clearOfflineQueue: async () => undefined };
+      if (name === '../store/chatSlice') return { resetChatState: () => ({ type: 'resetChat' }) };
+      if (name === '../store/discoverSlice') return { resetDiscoverState: () => ({ type: 'resetDiscover' }) };
+      if (name === '../features/location/locationClient') return { resetLocationSession: () => { locationResets += 1; } };
+      if (name === '../../modules/chat-timeline') return { clearNativeChatAccount: async () => undefined };
+      // The design preview is off: requests go to the server as normal.
+      if (name === '../development/onboardingPreviewRuntime') return { isOnboardingPreview: () => false, onboardingPreviewResponse: () => ({}) };
       throw new Error(`Unexpected dependency: ${name}`);
     },
   });
   return {
     request: (config) => request(config), success: (response) => success(response), failure: (error) => failure(error), actions, retries,
-    refresh: (fn) => { refresh = fn; }, stored: () => stored,
+    refresh: (fn) => { refresh = fn; }, stored: () => stored, locationResets: () => locationResets,
     rotateAccessToken() { auth = { ...auth, token: 'rotated-token-a' }; subscriber(); },
     logout() { auth = { user: null, token: null }; stored = null; subscriber(); },
     switchAccount() { auth = { user: { id: 'b' }, token: 'token-b' }; stored = 'refresh-b'; subscriber(); },
@@ -76,6 +87,19 @@ test('a network failure during refresh does not log out or erase credentials', a
   await assert.rejects(h.failure({ response: { status: 401 }, config: h.request({ url: '/chat/search', headers: {} }) }));
   assert.equal(h.stored(), 'refresh-a');
   assert.equal(h.actions.length, 0);
+});
+
+test('a rejected refresh clears the location session before logout', async () => {
+  const h = harness();
+  h.refresh(async () => {
+    const error = new Error('Refresh rejected');
+    error.response = { status: 401 };
+    throw error;
+  });
+  await assert.rejects(h.failure({ response: { status: 401 }, config: h.request({ url: '/chat/search', headers: {} }) }));
+  assert.equal(h.locationResets(), 1);
+  assert.equal(h.stored(), null);
+  assert.ok(h.actions.some((action) => action.type === 'logout'));
 });
 
 test('a delayed 401 uses the current access token without rotating credentials again', async () => {

@@ -9,12 +9,13 @@ function harness(failStorage = false, networkFailures = 0) {
   let auth = { token: 'token-a', user: { id: 'a' } };
   let finish;
   const calls = [];
+  const urls = [];
   const store = { getState: () => ({ auth }), dispatch: (action) => {
     calls.push(action);
     if (action === 'logout') auth = { token: null, user: null };
   } };
   const modules = {
-    axios: { post: (_url, _data, config) => { calls.push(config.headers.Authorization); if (networkFailures-- > 0) return Promise.reject(new Error('Offline')); return new Promise(resolve => { finish = resolve; }); } },
+    axios: { post: (url, _data, config) => { urls.push(url); calls.push(config.headers.Authorization); if (networkFailures-- > 0) return Promise.reject(new Error('Offline')); return new Promise(resolve => { finish = resolve; }); } },
     './api': { api: { defaults: { baseURL: 'http://localhost/api/v1' } } },
     '../store': { store },
     '../store/authSlice': { logout: () => 'logout' },
@@ -23,6 +24,14 @@ function harness(failStorage = false, networkFailures = 0) {
     './socket': { disconnectSocket: () => calls.push('disconnect') },
     './offlineQueue': { clearOfflineQueue: () => { calls.push(`queue:${auth.user.id}`); return failStorage ? Promise.reject(new Error('storage')) : Promise.resolve(); } },
     './credentialStore': { credentialStore: { clear: () => { calls.push('credentials'); return Promise.resolve(); } } },
+    '../features/location/locationClient': { resetLocationSession: () => calls.push('resetLocation') },
+    '../features/verification/useVerificationStatus': { clearVerificationStatus: () => undefined },
+    '../features/discovery/useRoses': { resetRoses: () => undefined },
+    '../features/notifications/useUnreadNotifications': { resetUnread: () => undefined },
+    '../features/safety/hiddenWords': { resetHiddenWords: () => undefined },
+    '../../modules/chat-timeline': { clearNativeChatAccount: () => Promise.resolve() },
+    // This phone's push token goes with the session (NOTIFICATIONS_PLAN.md 10).
+    './notifications': { registeredToken: () => Promise.resolve(null), clearPhoneNotifications: () => Promise.resolve() },
   };
   const module = { exports: {} };
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '../src/services/sessionLogout.ts'), 'utf8'), {
@@ -31,7 +40,7 @@ function harness(failStorage = false, networkFailures = 0) {
   vm.runInNewContext(code, { module, exports: module.exports, require: name => {
     assert.ok(modules[name], name); return modules[name];
   } });
-  return { ...module.exports, calls, auth: () => auth, finish: () => finish(),
+  return { ...module.exports, calls, urls, auth: () => auth, finish: () => finish(),
     switchAccount: () => { auth = { token: 'token-b', user: { id: 'b' } }; } };
 }
 
@@ -39,13 +48,13 @@ test('logout closes access before the server replies and cannot clear a later ac
   const h = harness();
   const pending = h.logoutSession();
   assert.equal(h.auth().token, null);
-  assert.deepEqual(h.calls, ['Bearer token-a', 'queue:a', 'credentials', 'disconnect', 'resetChat', 'resetDiscover', 'logout']);
+  assert.deepEqual(h.calls, ['Bearer token-a', 'queue:a', 'credentials', 'disconnect', 'resetLocation', 'resetChat', 'resetDiscover', 'logout']);
   h.switchAccount();
   h.finish();
   const result = await pending;
   assert.equal(result.serverRevoked, true);
   assert.equal(h.auth().token, 'token-b');
-  assert.equal(h.calls.length, 7);
+  assert.equal(h.calls.length, 8);
 });
 
 test('a queue storage failure does not prevent credential cleanup or local logout', async () => {
@@ -73,4 +82,18 @@ test('persistent network failure stops after three attempts and reports incomple
   assert.equal((await h.logoutSession()).serverRevoked, false);
   assert.equal(h.calls.filter(call => call === 'Bearer token-a').length, 3);
   assert.equal(h.auth().token, null);
+});
+
+test('log out of all devices ends every session on the server, not only this one', async () => {
+  const h = harness();
+  const pending = h.logoutSession({ everywhere: true });
+  assert.equal(h.auth().token, null, 'this phone is signed out at once');
+  h.finish();
+  await pending;
+  assert.deepEqual([...h.urls], ['http://localhost/api/v1/auth/logout-all']);
+  const single = harness();
+  const one = single.logoutSession();
+  single.finish();
+  await one;
+  assert.deepEqual([...single.urls], ['http://localhost/api/v1/auth/logout']);
 });
