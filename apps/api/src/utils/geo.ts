@@ -1,33 +1,30 @@
 /**
- * Geo helpers for distance-based discovery.
+ * Geo helpers for distance-based discovery (LOCATION_SPEC.md).
  *
  * Design notes:
- * - Coordinates are snapped to a ~1km grid BEFORE storage. Exact coordinates
- *   are never persisted and never leave the server. Returning precise
- *   distances lets an attacker trilaterate a user's home address by sampling
- *   from three positions, which has caused real stalking incidents on other
- *   dating apps.
- * - Distances shown to users are bucketed, never exact.
+ * - Coordinates are snapped to a ~2 km grid (0.02 degrees) BEFORE storage,
+ *   and the app snaps a precise fix on the phone before sending it. Exact
+ *   coordinates are never persisted and never leave the device. Returning
+ *   precise distances lets an attacker trilaterate a user's home address by
+ *   sampling from three positions, which has caused real stalking incidents
+ *   on other dating apps.
+ * - Distances shown to users are bucketed, never exact, and never finer than
+ *   the grid's ~3 km worst-case error.
  * - Retrieval uses a cheap bounding box in SQL (indexed) and then refines
- *   with haversine in memory. This needs no Postgres extensions, so it works
- *   on any managed instance. PostGIS is the upgrade path once a single
- *   bounding box stops being selective enough.
+ *   with haversine. PostGIS is the upgrade path once a single bounding box
+ *   stops being selective enough.
  */
+import { snapToGrid as snapShared } from '@iem-dating/shared/location';
 
 const EARTH_RADIUS_KM = 6371;
-/** ~1.1km at the equator; the grid users are snapped to. */
-const GRID_DEGREES = 0.01;
 
 export type Coords = { latitude: number; longitude: number };
 
 const toRad = (deg: number) => (deg * Math.PI) / 180;
 
-/** Snap a raw GPS fix to the privacy grid. Always apply before storing. */
+/** Snap a raw fix to the privacy grid. Always apply before storing. The grid is shared with the app. */
 export function snapToGrid(coords: Coords): Coords {
-  return {
-    latitude: Math.round(coords.latitude / GRID_DEGREES) * GRID_DEGREES,
-    longitude: Math.round(coords.longitude / GRID_DEGREES) * GRID_DEGREES,
-  };
+  return snapShared(coords);
 }
 
 export function isValidCoords(coords: Partial<Coords>): coords is Coords {
@@ -81,10 +78,22 @@ export function boundingBox(center: Coords, radiusKm: number) {
 
 /**
  * Bucketed distance for display. Never return the raw number to a client.
+ * No band is finer than 5 km: snapping both ends to a 0.02 degree grid can
+ * move a distance by up to ~3 km, so "under 1 km" would be a claim the data
+ * cannot support (LOCATION_SPEC.md 6.5).
  */
-export function distanceLabel(km: number): string {
-  if (km < 1) return 'Less than 1 km away';
-  if (km < 5) return '1-5 km away';
+export function distanceLabel(km: number, unit: string = 'km'): string {
+  // The same bands, named in miles (5 km is 3.1 mi, 100 km is 62 mi), rounded
+  // to numbers people say. The bands themselves never get finer.
+  if (unit === 'mi') {
+    if (km < 5) return 'Under 3 mi away';
+    if (km < 10) return '3-6 mi away';
+    if (km < 25) return '6-15 mi away';
+    if (km < 50) return '15-30 mi away';
+    if (km < 100) return '30-60 mi away';
+    return 'Over 60 mi away';
+  }
+  if (km < 5) return 'Under 5 km away';
   if (km < 10) return '5-10 km away';
   if (km < 25) return '10-25 km away';
   if (km < 50) return '25-50 km away';

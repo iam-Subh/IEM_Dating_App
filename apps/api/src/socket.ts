@@ -1,3 +1,4 @@
+import { corsOrigin } from './utils/corsOrigin';
 import { Server, Socket } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { redisClient } from './utils/redis';
@@ -9,6 +10,8 @@ import { MatchAccessService } from './services/match-access.service';
 import { AccessSessionService } from './services/access-session.service';
 import type Redis from 'ioredis';
 import { requireSocketDatingEligibility } from './services/socket-dating-access.service';
+import { SearchPeopleService } from './services/search-people.service';
+import { setPresenceServer } from './services/presence.service';
 
 let ioInstance: Server | null = null;
 let socketPubClient: Redis | null = null;
@@ -18,6 +21,16 @@ export const getIO = () => ioInstance;
 
 export const disconnectUserSockets = (userId: string) => {
   ioInstance?.in(`user:${userId}`).disconnectSockets(true);
+};
+
+/** Drops only the live connections of these sessions - one signed-out device, not all of them. */
+export const disconnectSessionSockets = async (userId: string, jtis: string[]) => {
+  if (!ioInstance || !jtis.length) return;
+  const wanted = new Set(jtis);
+  const sockets = await ioInstance.in(`user:${userId}`).fetchSockets();
+  for (const socket of sockets) {
+    if (wanted.has((socket.data as { jti?: string } | undefined)?.jti ?? '')) socket.disconnect(true);
+  }
 };
 
 export const evictMatchRoom = (matchId: string) => {
@@ -36,7 +49,7 @@ export const closeSocket = async () => {
 
 export const setupSocket = (httpServer: HttpServer) => {
   const io = new Server(httpServer, {
-    cors: { origin: process.env.CORS_ORIGIN || '*' },
+    cors: { origin: corsOrigin() },
     // A 5s timeout under a 10s interval disconnected healthy phones on
     // congested mobile networks, and each disconnect forced a full replay.
     // These are the Socket.IO defaults.
@@ -55,6 +68,7 @@ export const setupSocket = (httpServer: HttpServer) => {
   subClient.on('error', (err) => logger.error('Redis subClient error:', err.message));
 
   io.adapter(createAdapter(pubClient, subClient));
+  setPresenceServer(io);
 
   // Authentication middleware
   io.use(async (socket, next) => {
@@ -64,6 +78,9 @@ export const setupSocket = (httpServer: HttpServer) => {
       const decoded = await AccessSessionService.authenticate(token);
       await requireSocketDatingEligibility(decoded.sub);
       (socket as any).user = decoded;
+      // Which session this connection belongs to (Active sessions signs one out).
+      socket.data.jti = decoded.jti;
+      socket.data.userId = decoded.sub;
       next();
     } catch (err) {
       next(new Error('Authentication error'));
@@ -74,6 +91,8 @@ export const setupSocket = (httpServer: HttpServer) => {
     const established = (socket as any).user as { sub: string; jti: string; sv: number };
     const userId = established?.sub;
     logger.info('Socket connected');
+    let activeMatchIds: string[] = [];
+    let sharesPresence = true;
 
     socket.use(async (_event, next) => {
       try {
@@ -93,20 +112,30 @@ export const setupSocket = (httpServer: HttpServer) => {
     const roomsReady = (async () => { if (userId) {
       try {
         await socket.join(`user:${userId}`);
-        const matches = await prisma.match.findMany({
-          where: {
-            status: 'active',
-            OR: [
-              { user1Id: userId },
-              { user2Id: userId },
-            ],
-          },
-          select: { id: true },
-        });
+        const [matches, user] = await Promise.all([
+          prisma.match.findMany({
+            where: {
+              status: 'active',
+              OR: [
+                { user1Id: userId },
+                { user2Id: userId },
+              ],
+            },
+            select: { id: true },
+          }),
+          prisma.user.findUnique({ where: { id: userId }, select: { showOnlineStatus: true } }),
+        ]);
+        sharesPresence = user?.showOnlineStatus !== false;
 
         // join() is asynchronous with the Redis adapter. Awaiting keeps a
         // client that emits immediately after connect from missing its rooms.
         await Promise.all(matches.map((match) => socket.join(match.id)));
+        activeMatchIds = matches.map((match) => match.id);
+        const userSockets = await io.in(`user:${userId}`).fetchSockets();
+        if (userSockets.length === 1 && sharesPresence) {
+          await prisma.user.update({ where: { id: userId }, data: { lastActiveAt: new Date() } });
+          activeMatchIds.forEach((matchId) => socket.to(matchId).emit('presence_changed', { userId, online: true, lastSeenAt: null }));
+        }
         logger.info('Socket joined its authorized match rooms');
       } catch (err) {
         logger.error('Error auto-joining match rooms:', err);
@@ -122,6 +151,33 @@ export const setupSocket = (httpServer: HttpServer) => {
         if (callback) callback({ success: true });
       } catch {
         if (callback) callback({ success: false, error: 'Match is unavailable' });
+      }
+    });
+
+    // Live profile in Search (SEARCH_SPEC.md 5.1): while a person's social
+    // layer is open, a change to their profile nudges this socket to re-read
+    // it. One profile at a time, and only one this viewer can find at all -
+    // the same check as the search itself. The nudge carries nothing.
+    let watchedProfile: string | null = null;
+    socket.on('watch_profile', async (targetId: unknown, callback?: (response: any) => void) => {
+      try {
+        if (!userId) throw new Error('Not authenticated');
+        if (watchedProfile) {
+          await socket.leave(`profile-watch:${watchedProfile}`);
+          watchedProfile = null;
+        }
+        if (targetId === null || targetId === undefined || targetId === '') {
+          callback?.({ success: true });
+          return;
+        }
+        if (typeof targetId !== 'string' || !/^[0-9a-f-]{36}$/i.test(targetId)) throw new Error('Invalid profile');
+        const person = await SearchPeopleService.person(userId, targetId);
+        if (!person) throw new Error('Unavailable');
+        await socket.join(`profile-watch:${targetId}`);
+        watchedProfile = targetId;
+        callback?.({ success: true });
+      } catch {
+        callback?.({ success: false });
       }
     });
 
@@ -148,19 +204,18 @@ export const setupSocket = (httpServer: HttpServer) => {
       try {
         if (!userId) return;
         await ChatService.markAsRead(data.matchId, userId, data.messageIds);
-        // Notify the other user that messages have been read
-        socket.to(data.matchId).emit('messages_read', { matchId: data.matchId, readBy: userId });
       } catch (err) {
         logger.error('Error marking messages as read:', err);
       }
     });
 
     // Typing indicators
-    socket.on('typing_start', async (data: { matchId: string }) => {
+    socket.on('typing_start', async (data: { matchId: string; activity?: 'typing' | 'recording' }) => {
       try {
         if (!userId) return;
-        await MatchAccessService.requireActiveMatch(userId, data.matchId);
-        socket.to(data.matchId).emit('typing_start', { senderId: userId, matchId: data.matchId });
+        const match = await MatchAccessService.requireActiveMatch(userId, data.matchId);
+        const peerId = match.user1Id === userId ? match.user2Id : match.user1Id;
+        io.to(`user:${peerId}`).emit('typing_start', { senderId: userId, matchId: data.matchId, activity: data.activity === 'recording' ? 'recording' : 'typing' });
       } catch {
         return;
       }
@@ -174,19 +229,119 @@ export const setupSocket = (httpServer: HttpServer) => {
         logger.error('Error marking messages as delivered:', err);
       }
     });
-    
-    socket.on('typing_stop', async (data: { matchId: string }) => {
+
+    socket.on('presence_query', async (data: { matchId: string; userId: string }, callback?: (response: any) => void) => {
       try {
         if (!userId) return;
-        await MatchAccessService.requireActiveMatch(userId, data.matchId);
-        socket.to(data.matchId).emit('typing_stop', { senderId: userId, matchId: data.matchId });
+        const match = await MatchAccessService.requireActiveMatch(userId, data.matchId);
+        if (data.userId !== match.user1Id && data.userId !== match.user2Id) throw new Error('User is not in this match');
+        const [sockets, user] = await Promise.all([
+          io.in(`user:${data.userId}`).fetchSockets(),
+          prisma.user.findUnique({ where: { id: data.userId }, select: { lastActiveAt: true, showOnlineStatus: true } }),
+        ]);
+        // Both ways: hiding your own activity status hides everyone else's from you.
+        if (user?.showOnlineStatus === false || !sharesPresence) {
+          callback?.({ success: true, online: false, lastSeenAt: null, hidden: true });
+          return;
+        }
+        callback?.({
+          success: true,
+          // On screen: a connection that is not sitting in the background.
+          online: sockets.some((entry) => !(entry.data as { background?: boolean })?.background),
+          lastSeenAt: user?.lastActiveAt?.toISOString() ?? null,
+          hidden: false,
+        });
+      } catch {
+        callback?.({ success: false });
+      }
+    });
+
+    socket.on('presence_privacy_changed', async (_data: unknown, callback?: (response: any) => void) => {
+      try {
+        if (!userId) return;
+        const user = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { showOnlineStatus: true, lastActiveAt: true },
+        });
+        sharesPresence = user?.showOnlineStatus !== false;
+        const sockets = sharesPresence ? await io.in(`user:${userId}`).fetchSockets() : [];
+        const lastSeenAt = sharesPresence ? null : new Date();
+        if (lastSeenAt) {
+          await prisma.user.update({ where: { id: userId }, data: { lastActiveAt: lastSeenAt } });
+        }
+        activeMatchIds.forEach((matchId) => io.to(matchId).emit('presence_changed', {
+          userId,
+          online: sharesPresence && sockets.length > 0,
+          lastSeenAt: lastSeenAt?.toISOString() ?? null,
+          hidden: !sharesPresence,
+        }));
+        callback?.({ success: true });
+      } catch {
+        callback?.({ success: false });
+      }
+    });
+    
+    /**
+     * The app on screen pings every 2 minutes: "last active" stays true to the
+     * minute while it is open, and stops the moment it goes to the background.
+     */
+    socket.on('presence_heartbeat', async () => {
+      try {
+        if (!userId) return;
+        const wasBackground = socket.data.background === true;
+        socket.data.background = false;
+        const fresh = await redisClient.set(`presence-heartbeat:${userId}`, '1', 'EX', 60, 'NX');
+        if (fresh === 'OK') await prisma.user.updateMany({ where: { id: userId }, data: { lastActiveAt: new Date() } });
+        if (wasBackground && sharesPresence) {
+          activeMatchIds.forEach((matchId) => socket.to(matchId).emit('presence_changed', { userId, online: true, lastSeenAt: null }));
+        }
       } catch {
         return;
       }
     });
 
-    socket.on('disconnect', () => {
+    /** The app left the screen: still connected for messages, but not "online". */
+    socket.on('presence_background', async () => {
+      try {
+        if (!userId) return;
+        socket.data.background = true;
+        const others = await io.in(`user:${userId}`).fetchSockets();
+        if (others.some((entry) => !(entry.data as { background?: boolean })?.background)) return;
+        const lastSeenAt = new Date();
+        await prisma.user.updateMany({ where: { id: userId }, data: { lastActiveAt: lastSeenAt } });
+        if (sharesPresence) {
+          activeMatchIds.forEach((matchId) => io.to(matchId).emit('presence_changed', { userId, online: false, lastSeenAt: lastSeenAt.toISOString() }));
+        }
+      } catch {
+        return;
+      }
+    });
+
+    socket.on('typing_stop', async (data: { matchId: string }) => {
+      try {
+        if (!userId) return;
+        const match = await MatchAccessService.requireActiveMatch(userId, data.matchId);
+        const peerId = match.user1Id === userId ? match.user2Id : match.user1Id;
+        io.to(`user:${peerId}`).emit('typing_stop', { senderId: userId, matchId: data.matchId });
+      } catch {
+        return;
+      }
+    });
+
+    socket.on('disconnect', async () => {
       logger.info('Socket disconnected');
+      if (!userId) return;
+      try {
+        const remaining = await io.in(`user:${userId}`).fetchSockets();
+        if (remaining.length > 0) return;
+        const user = await prisma.user.findUnique({ where: { id: userId }, select: { showOnlineStatus: true } });
+        if (user?.showOnlineStatus === false) return;
+        const lastSeenAt = new Date();
+        await prisma.user.updateMany({ where: { id: userId }, data: { lastActiveAt: lastSeenAt } });
+        activeMatchIds.forEach((matchId) => io.to(matchId).emit('presence_changed', { userId, online: false, lastSeenAt: lastSeenAt.toISOString() }));
+      } catch (error) {
+        logger.error('Error updating disconnected presence:', error);
+      }
     });
   });
 

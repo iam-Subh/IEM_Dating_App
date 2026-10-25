@@ -21,6 +21,28 @@ export function validateAuthConfiguration(): void {
   validateOTPConfiguration();
 }
 
+/**
+ * "Use that one?" (GOOGLE_SIGNUP_PLAN.md 1.4): proof, for ten minutes, that
+ * the person signed in as `from` owns the inbox of `to`'s college email. Its
+ * own audience, so it can never pass as a sign-in token.
+ */
+const SWITCH_AUDIENCE = 'iem-connect-account-switch';
+export function signAccountSwitch(from: string, to: string) {
+  return jwt.sign({ sub: from, to, type: 'account_switch' }, requiredSecret('JWT_ACCESS_SECRET'),
+    { algorithm: 'HS256', issuer: ISSUER, audience: SWITCH_AUDIENCE, expiresIn: '10m' });
+}
+export function verifyAccountSwitch(token: string): { from: string; to: string } | null {
+  try {
+    const decoded = jwt.verify(token, requiredSecret('JWT_ACCESS_SECRET'), {
+      algorithms: ['HS256'], issuer: ISSUER, audience: SWITCH_AUDIENCE,
+    }) as { sub?: string; to?: string; type?: string };
+    if (decoded.type !== 'account_switch' || !decoded.sub || !decoded.to) return null;
+    return { from: decoded.sub, to: decoded.to };
+  } catch {
+    return null;
+  }
+}
+
 export const generateTokens = (userId: string, _identifier: string, jti: string, _role: string = 'user', sessionVersion = 1) => {
   validateAuthConfiguration();
   const common = { sub: userId, jti, sv: sessionVersion };
