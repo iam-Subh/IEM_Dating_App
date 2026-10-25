@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # Primary Database
   postgres:
-    image: postgres:13-alpine
+    image: postgres:17-alpine
     environment:
       POSTGRES_USER: iem_dating_user
       POSTGRES_PASSWORD: iem_dating_password
@@ -33,6 +33,15 @@ services:
     ports:
       - "5672:5672"   # Connection port
       - "15672:15672" # Management UI
+    restart: unless-stopped
+
+  # Face service for the real-person check (apps/face-service, PHOTO_VERIFICATION_PLAN.md 7.1).
+  # Private: bound to this machine only; the API calls it.
+  face:
+    build: ./apps/face-service
+    image: iem-face-service
+    ports:
+      - "127.0.0.1:8090:8090"
     restart: unless-stopped
 
 volumes:
