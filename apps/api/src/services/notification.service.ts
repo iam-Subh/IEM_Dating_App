@@ -32,7 +32,9 @@ export class NotificationService {
       await PushService.send(userId, {
         title: "It's a match!",
         body: `You and ${otherUserName} liked each other!`,
-        data: { url: `iemdating://match/${matchId}`, matchId },
+        data: { url: `iemdating://chat/${matchId}`, matchId },
+        category: 'matches',
+        kind: 'match',
       });
       logger.info('[NOTIFICATION] Match notification queued');
     } catch (error) {
@@ -69,6 +71,8 @@ export class NotificationService {
         title: senderName,
         body: preview,
         data: { url: `iemdating://chat/${matchId}`, matchId },
+        category: 'messages',
+        kind: 'message',
       });
 
     } catch (error) {
@@ -76,32 +80,8 @@ export class NotificationService {
     }
   }
 
-  /**
-   * Send "Someone liked you" notification (optional — for premium users).
-   */
-  static async sendLikeNotification(
-    userId: string,
-    fromUserName: string
-  ): Promise<void> {
-    try {
-      await prisma.notification.create({
-        data: {
-          userId,
-          type: 'like',
-          title: 'Someone likes you! 💕',
-          body: `${fromUserName} liked your profile`,
-          data: { fromUserName },
-        },
-      });
-      await PushService.send(userId, {
-        title: 'Someone likes you!',
-        body: `${fromUserName} liked your profile`,
-        data: { url: 'iemdating://main' },
-      });
-    } catch (error) {
-      logger.error('[NOTIFICATION] Error sending like notification:', error);
-    }
-  }
+  // Likes and Roses are told through the outbox (`like.received`), batched
+  // and never naming the sender (STANDOUTS_LIKES_SPEC.md 4.4).
 
   /**
    * Send a system notification (report resolved, account warning, etc.).
@@ -120,7 +100,7 @@ export class NotificationService {
           body,
         },
       });
-      await PushService.send(userId, { title, body, data: { url: 'iemdating://main' } });
+      await PushService.send(userId, { title, body, data: { url: 'iemdating://main' }, category: 'account_security' });
     } catch (error) {
       logger.error('[NOTIFICATION] Error sending system notification:', error);
     }

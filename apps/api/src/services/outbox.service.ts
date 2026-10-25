@@ -6,7 +6,10 @@ export const OUTBOX_TOPICS = {
   CHAT_EVENT: 'chat.event',
   FOLLOW_REQUESTED: 'follow.requested',
   STORY_PUBLISHED: 'story.published',
+  STORY_BATCH_FAILED: 'story.batch.failed',
   PROFILE_VIDEO_PREVIEW_REQUESTED: 'profile.video-preview.requested',
+  REACTION_ADDED: 'reaction.added',
+  LIKE_RECEIVED: 'like.received',
 } as const;
 
 export type OutboxTopic = (typeof OUTBOX_TOPICS)[keyof typeof OUTBOX_TOPICS];
@@ -19,6 +22,8 @@ export class OutboxService {
       aggregateId: string;
       deduplicationKey: string;
       payload: Prisma.InputJsonValue;
+      /** Not before this moment: the worker leaves it until then. */
+      availableAt?: Date;
     },
   ) {
     return tx.outboxEvent.create({
@@ -28,6 +33,7 @@ export class OutboxService {
         deduplicationKey: input.deduplicationKey,
         payloadVersion: 1,
         payload: input.payload,
+        ...(input.availableAt ? { availableAt: input.availableAt } : {}),
       },
     });
   }
