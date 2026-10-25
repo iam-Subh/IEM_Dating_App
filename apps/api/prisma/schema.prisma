@@ -3,87 +3,203 @@ generator client {
 }
 
 datasource db {
-  provider          = "postgresql"
-  url               = env("DATABASE_URL")
-  directUrl         = env("DATABASE_URL")
-  relationMode      = "prisma"
+  provider     = "postgresql"
+  url          = env("DATABASE_URL")
+  directUrl    = env("DATABASE_URL")
+  relationMode = "prisma"
 }
 
 model User {
-  id                 String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email              String?           @unique @db.VarChar(255)
-  phone              String?           @unique @db.VarChar(20)
-  name               String            @db.VarChar(255)
-  passwordHash       String            @map("password_hash") @db.VarChar(255)
-  college            String?           @db.VarChar(255)
-  department         String?           @db.VarChar(100)
-  graduationYear     Int?              @map("graduation_year")
-  yearOfStudy        Int?              @map("year_of_study")
-  birthday           DateTime?
-  age                Int?
-  discoveryCategory  String?           @map("discovery_category") @db.VarChar(32)
-  showMeCategories   String[]          @default([]) @map("show_me_categories")
-  minAgePref         Int?              @map("min_age_pref")
-  maxAgePref         Int?              @map("max_age_pref")
-  discoveryMode      String?           @map("discovery_mode") @db.VarChar(16)
-  preferencesConfirmedAt DateTime?     @map("preferences_confirmed_at")
-  storiesEnabled      Boolean           @default(false) @map("stories_enabled")
-  allowFollowRequests Boolean           @default(false) @map("allow_follow_requests")
-  eligibilityVersion Int              @default(0) @map("eligibility_version")
-  discoverySample    Int              @default(dbgenerated("(floor((random() * (1048576)::double precision)))::integer")) @map("discovery_sample")
-  gender             String?           @db.VarChar(50)
-  showGender         Boolean           @default(true) @map("show_gender")
-  orientation        String[]          @default([])
-  showOrientation    Boolean           @default(true) @map("show_orientation")
-  seeking            String?           @db.VarChar(50)
-  distancePreference Int?              @default(100) @map("distance_preference")
-  preferences        Json?
-  isVerified         Boolean           @default(false) @map("is_verified")
-  emailVerifiedAt    DateTime?         @map("email_verified_at")
-  phoneVerifiedAt    DateTime?         @map("phone_verified_at")
-  accountStatus      String            @default("active") @map("account_status") @db.VarChar(24)
-  sessionVersion     Int               @default(1) @map("session_version")
-  lastAccountEventSeq Int              @default(0) @map("last_account_event_seq")
-  role               String            @default("user") @db.VarChar(20)
-  createdAt          DateTime          @default(now()) @map("created_at")
-  updatedAt          DateTime          @default(now()) @updatedAt @map("updated_at")
-  attendanceMood     String?           @map("attendance_mood") @db.VarChar(100)
-  campus             String?           @db.VarChar(255)
-  height             Int?
-  clubs              String[]          @default([])
-  degree             String?           @db.VarChar(255)
-  hangoutSpots       String[]          @default([]) @map("hangout_spots")
-  isHosteller        Boolean?          @map("is_hosteller")
-  avatarUrl          String?           @map("avatar_url") @db.VarChar(500)
-  profileVideoUrl    String?           @map("profile_video_url") @db.VarChar(500)
-  videoPreviewUrl    String?           @map("video_preview_url") @db.VarChar(500)
-  lastActiveAt       DateTime?         @map("last_active_at")
-  locationArea       String?           @map("location_area") @db.VarChar(255)
-  // Snapped to a ~1km grid before storage - never store or return raw GPS.
-  latitude           Decimal?          @db.Decimal(9, 6)
-  longitude          Decimal?          @db.Decimal(9, 6)
-  locationUpdatedAt  DateTime?         @map("location_updated_at")
-  locationConsentAt  DateTime?         @map("location_consent_at")
-  matchPreferences   MatchPreference[]
-  matchesAsUser1     Match[]           @relation("MatchUser1")
-  matchesAsUser2     Match[]           @relation("MatchUser2")
-  messages           Message[]
-  photos             ProfilePhoto[]
-  reportsReceived    SafetyReport[]    @relation("ReportedUser")
-  reportsFiled       SafetyReport[]    @relation("Reporter")
-  swipesMade         Swipe[]           @relation("SwipesMade")
-  swipesReceived     Swipe[]           @relation("SwipesReceived")
-  sessions           UserSession[]
-  studentMembership  StudentMembership?
-  userScore          UserScore?
-  blocksGiven        UserBlock[]       @relation("BlockerUser")
-  blocksReceived     UserBlock[]       @relation("BlockedUser")
-  notifications      Notification[]
-  deviceTokens       DeviceToken[]
-  impressionsSeen    ProfileImpression[] @relation("ImpressionViewer")
-  impressionsShown   ProfileImpression[] @relation("ImpressionShown")
-  chatMediaAssets    ChatMediaAsset[]
-  profileMediaAssets ProfileMediaAsset[]
+  id                     String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                  String?             @unique @db.VarChar(255)
+  /// Google's id for this account (GOOGLE_SIGNUP_PLAN.md 4.1): how a Google sign-in finds it.
+  googleSub              String?             @unique @map("google_sub") @db.VarChar(255)
+  /// The Google address, shown in Settings > Account.
+  googleEmail            String?             @map("google_email") @db.VarChar(255)
+  googleLinkedAt         DateTime?           @map("google_linked_at")
+  /// The college an unverified account chose in onboarding (GOOGLE_SIGNUP_PLAN.md 1.3):
+  /// fills its campus list and its card, never who it sees. Cleared on verification.
+  claimedInstitutionId   String?             @map("claimed_institution_id") @db.Uuid
+  claimedInstitution     Institution?        @relation("ClaimedInstitution", fields: [claimedInstitutionId], references: [id])
+  /// "Later" on the Verify your college screen (reminder 1): onboarding goes on without it.
+  verifyLaterAt          DateTime?           @map("verify_later_at")
+  /// The 14-day grace period ran out unverified (GOOGLE_SIGNUP_PLAN.md 2.6): hidden from others until verified.
+  pausedAt               DateTime?           @map("paused_at")
+  /// Grace-period warnings sent so far: 0 none, 1 day 10, 2 day 12, 3 day 13.
+  graceWarningLevel      Int                 @default(0) @map("grace_warning_level") @db.SmallInt
+  /// Verify reminder pushes sent so far: 0 none, 1 day 1, 2 day 3, 3 day 7 (section 4, reminder 13).
+  verifyPushLevel        Int                 @default(0) @map("verify_push_level") @db.SmallInt
+  /// Expiry reminders sent for the current verification: 0 none, 1 at 30 days, 2 at 7, 3 at 1 (section 5).
+  expiryReminderLevel    Int                 @default(0) @map("expiry_reminder_level") @db.SmallInt
+  /// The one birthday change after onboarding has been used (6.2); later changes go through support.
+  birthdayChangedAt      DateTime?           @map("birthday_changed_at")
+  /// The device the account was created on: a backup signal for admins (6.1).
+  signupAndroidId        String?             @map("signup_android_id") @db.VarChar(64)
+  /// Passed the real-person check (selfie); only the person sees it (PHOTO_VERIFICATION_PLAN.md). Never a badge.
+  realPersonVerifiedAt   DateTime?           @map("real_person_verified_at")
+  /// Has passed the check at least once (kept while a later photo needs fixing). The 14-day rule
+  /// for Google accounts reads this, so a photo changed later never pauses the profile.
+  realPersonPassedAt     DateTime?           @map("real_person_passed_at")
+  name                   String              @db.VarChar(255)
+  passwordHash           String              @map("password_hash") @db.VarChar(255)
+  college                String?             @db.VarChar(255)
+  department             String?             @db.VarChar(100)
+  graduationYear         Int?                @map("graduation_year")
+  yearOfStudy            Int?                @map("year_of_study")
+  birthday               DateTime?
+  age                    Int?
+  discoveryCategory      String?             @map("discovery_category") @db.VarChar(32)
+  showMeCategories       String[]            @default([]) @map("show_me_categories")
+  minAgePref             Int?                @map("min_age_pref")
+  maxAgePref             Int?                @map("max_age_pref")
+  discoveryMode          String?             @map("discovery_mode") @db.VarChar(16)
+  preferencesConfirmedAt DateTime?           @map("preferences_confirmed_at")
+  storiesEnabled         Boolean             @default(false) @map("stories_enabled")
+  allowFollowRequests    Boolean             @default(false) @map("allow_follow_requests")
+  /// Who may reply to and react to your Stories: matches, close_friends or off.
+  storyReplies           String              @default("matches") @map("story_replies") @db.VarChar(16)
+  /// Who may put you in a mention sticker: everyone, following or off.
+  storyMentions          String              @default("everyone") @map("story_mentions") @db.VarChar(16)
+  /// People you mention may add your Story to theirs.
+  storyResharing         Boolean             @default(true) @map("story_resharing")
+  /// This person's Story viewer blocks screenshots and screen recording.
+  storyScreenshotBlock   Boolean             @default(true) @map("story_screenshot_block")
+  /// Roses left this week: a scarce, higher-priority Like (EXPLORE_SPEC.md, section 10).
+  roses                  Int                 @default(5)
+  /// When the weekly grant last topped this account up. The top-up is lazy, on read or spend.
+  rosesRefreshedAt       DateTime            @default(now()) @map("roses_refreshed_at")
+  /// When the one-time new-user Roses were given (STANDOUTS_PLAN.md 4.2). Null: not yet.
+  welcomeRosesAt         DateTime?           @map("welcome_roses_at")
+  /// A Story is kept privately after it ends, in the owner's Archive.
+  storyArchive           Boolean             @default(true) @map("story_archive")
+  /// Every Story is saved to the device gallery the moment it is shared.
+  /// Your follower and following counts show on your profile in Search (SEARCH_SPEC.md 5.1).
+  showFollowerCount      Boolean             @default(true) @map("show_follower_count")
+  storySaveToGallery     Boolean             @default(false) @map("story_save_to_gallery")
+  eligibilityVersion     Int                 @default(0) @map("eligibility_version")
+  discoverySample        Int                 @default(dbgenerated("(floor((random() * (1048576)::double precision)))::integer")) @map("discovery_sample")
+  gender                 String?             @db.VarChar(50)
+  showGender             Boolean             @default(true) @map("show_gender")
+  orientation            String[]            @default([])
+  showOrientation        Boolean             @default(true) @map("show_orientation")
+  seeking                String?             @db.VarChar(50)
+  distancePreference     Int?                @default(100) @map("distance_preference")
+  /// How distances are shown to this person: 'km' or 'mi'. Stored and compared in km always.
+  distanceUnit           String              @default("km") @map("distance_unit") @db.VarChar(2)
+  preferences            Json?
+  isVerified             Boolean             @default(false) @map("is_verified")
+  emailVerifiedAt        DateTime?           @map("email_verified_at")
+  accountStatus          String              @default("active") @map("account_status") @db.VarChar(24)
+  sessionVersion         Int                 @default(1) @map("session_version")
+  lastAccountEventSeq    Int                 @default(0) @map("last_account_event_seq")
+  role                   String              @default("user") @db.VarChar(20)
+  createdAt              DateTime            @default(now()) @map("created_at")
+  updatedAt              DateTime            @default(now()) @updatedAt @map("updated_at")
+  attendanceMood         String?             @map("attendance_mood") @db.VarChar(100)
+  campus                 String?             @db.VarChar(255)
+  height                 Int?
+  clubs                  String[]            @default([])
+  degree                 String?             @db.VarChar(255)
+  hangoutSpots           String[]            @default([]) @map("hangout_spots")
+  isHosteller            Boolean?            @map("is_hosteller")
+  avatarUrl              String?             @map("avatar_url") @db.VarChar(500)
+  profileVideoUrl        String?             @map("profile_video_url") @db.VarChar(500)
+  videoPreviewUrl        String?             @map("video_preview_url") @db.VarChar(500)
+  videoPosterUrl         String?             @map("video_poster_url") @db.VarChar(500)
+  videoPlaybackUrl       String?             @map("video_playback_url") @db.VarChar(500)
+  lastActiveAt           DateTime?           @map("last_active_at")
+  /// A suspension ends on its own at this time (admin panel).
+  suspendedUntil         DateTime?           @map("suspended_until")
+  /// The Terms and Privacy Policy version they agreed to (legal/documents.ts LEGAL_VERSION), and when.
+  termsVersion           Int                 @default(0) @map("terms_version")
+  termsAcceptedAt        DateTime?           @map("terms_accepted_at")
+  /// Hidden Words: messages and notes containing these are folded away for this person.
+  hiddenWords            String[]            @default([]) @map("hidden_words")
+  /// DPDP nominee: { name, contact, relation }.
+  nominee                Json?
+  /// The yearly reminder of the rules (IT Rules 2021).
+  rulesRemindedAt        DateTime?           @map("rules_reminded_at")
+  showOnlineStatus       Boolean             @default(true) @map("show_online_status")
+  /// "Active now" / "Recently active" on your cards for people you haven't matched.
+  /// Both ways: off also hides theirs from you (services/presence.service.ts).
+  showRecentlyActive     Boolean             @default(true) @map("show_recently_active")
+  /// Findable by name in Search by people at the same college (SEARCH_SPEC.md, section 7).
+  searchDiscoverable     Boolean             @default(true) @map("search_discoverable")
+  /// "Who can find me by name": also accounts that haven't verified their college (GOOGLE_SIGNUP_PLAN.md, Search). Off: verified students only.
+  searchByUnverified     Boolean             @default(false) @map("search_by_unverified")
+  /// My preferences, More criteria (PREFERENCES_SPEC.md): { [criterionId]: { values, required } }.
+  /// A soft choice ranks; `required` ("Must match") filters, both ways.
+  matchCriteria          Json                @default("{}") @map("match_criteria")
+  /// Keep age flexible: up to AGE_FLEX_YEARS outside the range, strict range first.
+  flexibleAge            Boolean             @default(true) @map("flexible_age")
+  /// Verified profiles only, both ways, like "show me".
+  verifiedOnly           Boolean             @default(false) @map("verified_only")
+  /// Everything in Likes You received before this has been seen (STANDOUTS_LIKES_SPEC.md 4.4).
+  likesSeenAt            DateTime?           @map("likes_seen_at")
+  /// Push notifications for Likes received (4.4). Roses have their own switch now.
+  notifyLikes            Boolean             @default(true) @map("notify_likes")
+  /// App settings: { [notification key]: boolean }. Missing keys use the catalogue's
+  /// default (services/app-settings.service.ts).
+  notificationPrefs      Json                @default("{}") @map("notification_prefs")
+  /// When the last batched "You have new Likes" push went out (4.4).
+  likesPushedAt          DateTime?           @map("likes_pushed_at")
+  locationArea           String?             @map("location_area") @db.VarChar(255)
+  // Snapped to a ~2km grid (0.02 deg) before storage - never store or return raw GPS.
+  latitude               Decimal?            @db.Decimal(9, 6)
+  longitude              Decimal?            @db.Decimal(9, 6)
+  locationUpdatedAt      DateTime?           @map("location_updated_at")
+  locationConsentAt      DateTime?           @map("location_consent_at")
+  /// LOCATION_SPEC.md. 'precise' or 'approximate', as the phone reported the last fix.
+  locationAccuracy       String?             @map("location_accuracy") @db.VarChar(16)
+  /// The accuracy radius the phone reported, in metres.
+  locationAccuracyM      Int?                @map("location_accuracy_m")
+  /// 'live' follows the phone; 'place' pins you to a saved place (section 7).
+  locationSource         String              @default("live") @map("location_source") @db.VarChar(8)
+  activePlaceId          String?             @map("active_place_id") @db.Uuid
+  /// Set while the phone is inside a saved place marked "hide me here":
+  /// the person is out of everyone's distance discovery until a fix lands
+  /// somewhere else (LOCATION_SPEC.md 7).
+  locationHiddenAt       DateTime?           @map("location_hidden_at")
+  /// The last accepted *live* cell: the speed check's baseline, which switching
+  /// to a saved place must not move, or switching back would look like a jump.
+  liveLatitude           Decimal?            @map("live_latitude") @db.Decimal(9, 6)
+  liveLongitude          Decimal?            @map("live_longitude") @db.Decimal(9, 6)
+  liveUpdatedAt          DateTime?           @map("live_updated_at")
+  /// Show people further away once everyone inside the area has been seen:
+  /// beyond the radius in distance mode, one scope wider in college mode.
+  expandRadius           Boolean             @default(true) @map("expand_radius")
+  hideDistance           Boolean             @default(false) @map("hide_distance")
+  hideFromMaps           Boolean             @default(false) @map("hide_from_maps")
+  /// Invisible hours, as minutes after midnight IST. Both null means off.
+  invisibleStart         Int?                @map("invisible_start") @db.SmallInt
+  invisibleEnd           Int?                @map("invisible_end") @db.SmallInt
+  /// campus | college | city | group - how far college mode reaches (section 8.4).
+  collegeScope           String              @default("college") @map("college_scope") @db.VarChar(16)
+  campusId               String?             @map("campus_id") @db.Uuid
+  campusRef              InstitutionCampus?  @relation(fields: [campusId], references: [id])
+  matchPreferences       MatchPreference[]
+  matchesAsUser1         Match[]             @relation("MatchUser1")
+  matchesAsUser2         Match[]             @relation("MatchUser2")
+  messages               Message[]
+  photos                 ProfilePhoto[]
+  reportsReceived        SafetyReport[]      @relation("ReportedUser")
+  reportsFiled           SafetyReport[]      @relation("Reporter")
+  swipesMade             Swipe[]             @relation("SwipesMade")
+  swipesReceived         Swipe[]             @relation("SwipesReceived")
+  sessions               UserSession[]
+  studentMembership      StudentMembership?
+  userScore              UserScore?
+  blocksGiven            UserBlock[]         @relation("BlockerUser")
+  blocksReceived         UserBlock[]         @relation("BlockedUser")
+  notifications          Notification[]
+  pushLogs               PushLog[]
+  pushQueue              PushQueue[]
+  pushEngagement         PushEngagement?
+  deviceTokens           DeviceToken[]
+  impressionsSeen        ProfileImpression[] @relation("ImpressionViewer")
+  impressionsShown       ProfileImpression[] @relation("ImpressionShown")
+  chatMediaAssets        ChatMediaAsset[]
+  profileMediaAssets     ProfileMediaAsset[]
 
   @@index([email])
   @@index([department])
@@ -96,6 +212,7 @@ model User {
   @@index([isVerified, lastActiveAt])
   // Bounding-box prefilter for distance queries.
   @@index([latitude, longitude])
+  @@index([campusId])
   @@index([discoverySample, id])
   // Partial discovery indexes (active sample and created order) are maintained in SQL migrations.
   @@index([showMeCategories], type: Gin, map: "users_discovery_categories_idx")
@@ -106,6 +223,9 @@ model ProfilePhoto {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId    String   @map("user_id") @db.Uuid
   photoUrl  String   @map("photo_url") @db.VarChar(500)
+  /// Card-sized rendition shown in discovery; null until processed.
+  cardUrl   String?  @map("card_url") @db.VarChar(500)
+  thumbUrl  String?  @map("thumb_url") @db.VarChar(500)
   isPrimary Boolean  @default(false) @map("is_primary")
   order     Int      @default(0)
   createdAt DateTime @default(now()) @map("created_at")
@@ -122,6 +242,10 @@ model Match {
   createdAt          DateTime          @default(now()) @map("created_at")
   expiresAt          DateTime?         @map("expires_at")
   status             String            @default("active") @db.VarChar(20)
+  /// When each person first opened this match: the "new" dot in New matches.
+  user1SeenAt        DateTime?         @map("user1_seen_at")
+  user2SeenAt        DateTime?         @map("user2_seen_at")
+  messageTtlSeconds  Int?              @map("message_ttl_seconds")
   chatSessions       ChatSession[]
   preferences        MatchPreference[]
   user1              User              @relation("MatchUser1", fields: [user1Id], references: [id])
@@ -151,67 +275,79 @@ model MatchPreference {
   @@map("match_preferences")
 }
 
-model Message {
-  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  matchId   String    @map("match_id") @db.Uuid
-  senderId  String    @map("sender_id") @db.Uuid
-  content   String
-  photoUrl  String?   @map("photo_url") @db.VarChar(500)
-  mediaKeys String[]  @default([]) @map("media_keys")
-  clientMessageId String? @map("client_message_id") @db.VarChar(100)
-  sentAt    DateTime  @default(now()) @map("sent_at")
-  readAt    DateTime? @map("read_at")
-  isDeleted Boolean   @default(false) @map("is_deleted")
-  hiddenBy  String[]  @default([]) @map("hidden_by")
-  messageSeq Int?      @map("message_seq")
-  type       String    @default("text") @db.VarChar(20)
-  metadata   Json?
-  replyToId  String?   @map("reply_to_id") @db.Uuid
-  storyId    String?   @map("story_id") @db.Uuid
-  editedAt   DateTime? @map("edited_at")
-  deletedForEveryoneAt DateTime? @map("deleted_for_everyone_at")
-  revision   Int       @default(1)
-  commandFingerprint String? @map("command_fingerprint") @db.VarChar(64)
-  match     Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
-  sender    User      @relation(fields: [senderId], references: [id])
+model ChatMessageMark {
+  messageId String   @map("message_id") @db.Uuid
+  scopeId   String   @map("scope_id") @db.Uuid
+  kind      String   @db.VarChar(8)
+  createdAt DateTime @default(now()) @map("created_at")
 
+  @@id([messageId, scopeId, kind])
+  @@index([scopeId, kind, createdAt])
+  @@map("chat_message_marks")
+}
+
+model Message {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  matchId              String    @map("match_id") @db.Uuid
+  senderId             String    @map("sender_id") @db.Uuid
+  content              String
+  photoUrl             String?   @map("photo_url") @db.VarChar(500)
+  mediaKeys            String[]  @default([]) @map("media_keys")
+  clientMessageId      String?   @map("client_message_id") @db.VarChar(100)
+  sentAt               DateTime  @default(now()) @map("sent_at")
+  readAt               DateTime? @map("read_at")
+  isDeleted            Boolean   @default(false) @map("is_deleted")
+  hiddenBy             String[]  @default([]) @map("hidden_by")
+  messageSeq           Int?      @map("message_seq")
+  type                 String    @default("text") @db.VarChar(20)
+  metadata             Json?
+  replyToId            String?   @map("reply_to_id") @db.Uuid
+  storyId              String?   @map("story_id") @db.Uuid
+  editedAt             DateTime? @map("edited_at")
+  deletedForEveryoneAt DateTime? @map("deleted_for_everyone_at")
+  expiresAt            DateTime? @map("expires_at")
+  revision             Int       @default(1)
+  commandFingerprint   String?   @map("command_fingerprint") @db.VarChar(64)
+  match                Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  sender               User      @relation(fields: [senderId], references: [id])
+
+  @@unique([matchId, messageSeq])
+  @@unique([senderId, clientMessageId])
   @@index([matchId])
   @@index([sentAt])
-  @@unique([matchId, messageSeq])
   @@index([matchId, sentAt, id], map: "messages_match_sent_id_idx")
-  @@unique([senderId, clientMessageId])
   @@map("messages")
 }
 
 model ChatSession {
-  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  matchId       String    @unique @map("match_id") @db.Uuid
-  lastMessageAt DateTime? @map("last_message_at")
-  unreadCount   Int       @default(0) @map("unread_count")
-  lastMessageSeq Int      @default(0) @map("last_message_seq")
-  lastEventSeq Int        @default(0) @map("last_event_seq")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  match         Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  matchId        String    @unique @map("match_id") @db.Uuid
+  lastMessageAt  DateTime? @map("last_message_at")
+  unreadCount    Int       @default(0) @map("unread_count")
+  lastMessageSeq Int       @default(0) @map("last_message_seq")
+  lastEventSeq   Int       @default(0) @map("last_event_seq")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  match          Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
 
   @@map("chat_sessions")
 }
 
 model SafetyReport {
-  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  reporterId     String   @map("reporter_id") @db.Uuid
-  reportedUserId String   @map("reported_user_id") @db.Uuid
-  matchId        String?  @map("match_id") @db.Uuid
-  reason         String?  @db.VarChar(100)
-  description    String?
-  sourceType     String?  @map("source_type") @db.VarChar(24)
-  sourceId       String?  @map("source_id") @db.Uuid
-  evidenceSnapshot Json?  @map("evidence_snapshot")
-  status         String   @default("pending") @db.VarChar(20)
-  moderationCaseId String? @map("moderation_case_id") @db.Uuid
-  createdAt      DateTime @default(now()) @map("created_at")
-  match          Match?   @relation(fields: [matchId], references: [id])
-  reportedUser   User     @relation("ReportedUser", fields: [reportedUserId], references: [id])
-  reporter       User     @relation("Reporter", fields: [reporterId], references: [id])
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reporterId       String   @map("reporter_id") @db.Uuid
+  reportedUserId   String   @map("reported_user_id") @db.Uuid
+  matchId          String?  @map("match_id") @db.Uuid
+  reason           String?  @db.VarChar(100)
+  description      String?
+  sourceType       String?  @map("source_type") @db.VarChar(24)
+  sourceId         String?  @map("source_id") @db.Uuid
+  evidenceSnapshot Json?    @map("evidence_snapshot")
+  status           String   @default("pending") @db.VarChar(20)
+  moderationCaseId String?  @map("moderation_case_id") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at")
+  match            Match?   @relation(fields: [matchId], references: [id])
+  reportedUser     User     @relation("ReportedUser", fields: [reportedUserId], references: [id])
+  reporter         User     @relation("Reporter", fields: [reporterId], references: [id])
 
   @@index([reportedUserId])
   @@index([reportedUserId, status])
@@ -221,139 +357,154 @@ model SafetyReport {
 }
 
 model UserSession {
-  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId     String   @map("user_id") @db.Uuid
-  tokenJti   String   @unique @map("token_jti") @db.VarChar(255)
-  familyId   String   @default(dbgenerated("gen_random_uuid()")) @map("family_id") @db.Uuid
-  replacedByJti String? @unique @map("replaced_by_jti") @db.VarChar(255)
-  revokedAt  DateTime? @map("revoked_at")
-  revokeReason String? @map("revoke_reason") @db.VarChar(40)
-  lastUsedAt DateTime? @map("last_used_at")
-  expiresAt  DateTime @map("expires_at")
-  deviceInfo Json?    @map("device_info")
-  createdAt  DateTime @default(now()) @map("created_at")
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  tokenJti      String    @unique @map("token_jti") @db.VarChar(255)
+  familyId      String    @default(dbgenerated("gen_random_uuid()")) @map("family_id") @db.Uuid
+  replacedByJti String?   @unique @map("replaced_by_jti") @db.VarChar(255)
+  revokedAt     DateTime? @map("revoked_at")
+  revokeReason  String?   @map("revoke_reason") @db.VarChar(40)
+  lastUsedAt    DateTime? @map("last_used_at")
+  expiresAt     DateTime  @map("expires_at")
+  deviceInfo    Json?     @map("device_info")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_sessions")
 }
 
 model ChatParticipant {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  matchId String @map("match_id") @db.Uuid
-  userId String @map("user_id") @db.Uuid
-  unreadCount Int @default(0) @map("unread_count")
-  lastReadMessageSeq Int @default(0) @map("last_read_message_seq")
-  lastDeliveredMessageSeq Int @default(0) @map("last_delivered_message_seq")
-  mutedUntil DateTime? @map("muted_until")
-  archivedAt DateTime? @map("archived_at")
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  matchId                 String    @map("match_id") @db.Uuid
+  userId                  String    @map("user_id") @db.Uuid
+  unreadCount             Int       @default(0) @map("unread_count")
+  lastReadMessageSeq      Int       @default(0) @map("last_read_message_seq")
+  lastDeliveredMessageSeq Int       @default(0) @map("last_delivered_message_seq")
+  mutedUntil              DateTime? @map("muted_until")
+  archivedAt              DateTime? @map("archived_at")
+  pinnedAt                DateTime? @map("pinned_at")
+  markedUnread            Boolean   @default(false) @map("marked_unread")
+  clearedThroughSeq       Int       @default(0) @map("cleared_through_seq")
+  hiddenAt                DateTime? @map("hidden_at")
+  updatedAt               DateTime  @default(now()) @updatedAt @map("updated_at")
+
   @@unique([matchId, userId])
   @@index([userId, updatedAt(sort: Desc), matchId])
   @@map("chat_participants")
 }
 
 model MessageReceipt {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  messageId String @map("message_id") @db.Uuid
-  recipientId String @map("recipient_id") @db.Uuid
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  messageId   String    @map("message_id") @db.Uuid
+  recipientId String    @map("recipient_id") @db.Uuid
   deliveredAt DateTime? @map("delivered_at")
-  readAt DateTime? @map("read_at")
+  readAt      DateTime? @map("read_at")
+  /// A voice note was listened to: the sender's blue microphone (MESSAGE_NOTIFICATIONS_PLAN.md 7).
+  playedAt    DateTime? @map("played_at")
+
   @@unique([messageId, recipientId])
   @@index([recipientId, readAt])
   @@map("message_receipts")
 }
 
 model MessageVisibility {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  messageId String @map("message_id") @db.Uuid
-  userId String @map("user_id") @db.Uuid
-  hiddenAt DateTime @default(now()) @map("hidden_at")
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  messageId String   @map("message_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  hiddenAt  DateTime @default(now()) @map("hidden_at")
+
   @@unique([messageId, userId])
   @@index([userId, hiddenAt])
   @@map("message_visibility")
 }
 
 model MessageReaction {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  messageId String @map("message_id") @db.Uuid
-  userId String @map("user_id") @db.Uuid
-  emoji String @db.VarChar(16)
-  revision Int @default(1)
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  messageId String   @map("message_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  emoji     String   @db.VarChar(16)
+  revision  Int      @default(1)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
   @@unique([messageId, userId])
   @@index([messageId, updatedAt])
   @@map("message_reactions")
 }
 
 model ChatEvent {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  matchId String @map("match_id") @db.Uuid
-  eventSeq Int @map("event_seq")
-  type String @db.VarChar(40)
-  actorId String @map("actor_id") @db.Uuid
-  audienceUserId String? @map("audience_user_id") @db.Uuid
-  entityId String @map("entity_id") @db.Uuid
-  entityRevision Int @default(1) @map("entity_revision")
-  payload Json
-  createdAt DateTime @default(now()) @map("created_at")
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  matchId        String   @map("match_id") @db.Uuid
+  eventSeq       Int      @map("event_seq")
+  type           String   @db.VarChar(40)
+  actorId        String   @map("actor_id") @db.Uuid
+  audienceUserId String?  @map("audience_user_id") @db.Uuid
+  entityId       String   @map("entity_id") @db.Uuid
+  entityRevision Int      @default(1) @map("entity_revision")
+  payload        Json
+  createdAt      DateTime @default(now()) @map("created_at")
+
   @@unique([matchId, eventSeq])
   @@index([matchId, createdAt])
   @@map("chat_events")
 }
 
 model ChatDeviceCursor {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId String @map("user_id") @db.Uuid
-  deviceId String @map("device_id") @db.VarChar(100)
-  matchId String @map("match_id") @db.Uuid
-  lastAppliedEventSeq Int @default(0) @map("last_applied_event_seq")
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId              String   @map("user_id") @db.Uuid
+  deviceId            String   @map("device_id") @db.VarChar(100)
+  matchId             String   @map("match_id") @db.Uuid
+  lastAppliedEventSeq Int      @default(0) @map("last_applied_event_seq")
+  updatedAt           DateTime @default(now()) @updatedAt @map("updated_at")
+
   @@unique([userId, deviceId, matchId])
   @@index([userId, deviceId, updatedAt])
   @@map("chat_device_cursors")
 }
 
 model AccountEvent {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId String @map("user_id") @db.Uuid
-  accountSeq Int @map("account_seq")
-  type String @db.VarChar(40)
-  matchId String? @map("match_id") @db.Uuid
-  payload Json
-  createdAt DateTime @default(now()) @map("created_at")
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  accountSeq Int      @map("account_seq")
+  type       String   @db.VarChar(40)
+  matchId    String?  @map("match_id") @db.Uuid
+  payload    Json
+  createdAt  DateTime @default(now()) @map("created_at")
+
   @@unique([userId, accountSeq])
   @@index([userId, createdAt])
   @@map("account_events")
 }
 
 model DeliveryAttempt {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  outboxEventId String @map("outbox_event_id") @db.Uuid
-  channel String @db.VarChar(20)
-  deviceId String @map("device_id") @db.Uuid
-  status String @default("pending") @db.VarChar(20)
-  attempts Int @default(0)
-  providerTicket String? @map("provider_ticket") @db.VarChar(255)
-  lastError String? @map("last_error") @db.VarChar(500)
-  completedAt DateTime? @map("completed_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  outboxEventId  String    @map("outbox_event_id") @db.Uuid
+  channel        String    @db.VarChar(20)
+  deviceId       String    @map("device_id") @db.Uuid
+  status         String    @default("pending") @db.VarChar(20)
+  attempts       Int       @default(0)
+  providerTicket String?   @map("provider_ticket") @db.VarChar(255)
+  lastError      String?   @map("last_error") @db.VarChar(500)
+  completedAt    DateTime? @map("completed_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+
   @@unique([outboxEventId, channel, deviceId])
   @@index([status, updatedAt])
   @@map("delivery_attempts")
 }
 
 model Follow {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  followerId String @map("follower_id") @db.Uuid
-  followeeId String @map("followee_id") @db.Uuid
-  status String @default("pending") @db.VarChar(20)
-  revision Int @default(1)
-  requestedAt DateTime @default(now()) @map("requested_at")
-  respondedAt DateTime? @map("responded_at")
-  removedAt DateTime? @map("removed_at")
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  followerId    String    @map("follower_id") @db.Uuid
+  followeeId    String    @map("followee_id") @db.Uuid
+  status        String    @default("pending") @db.VarChar(20)
+  revision      Int       @default(1)
+  requestedAt   DateTime  @default(now()) @map("requested_at")
+  respondedAt   DateTime? @map("responded_at")
+  removedAt     DateTime? @map("removed_at")
   cooldownUntil DateTime? @map("cooldown_until")
+
   @@unique([followerId, followeeId])
   @@index([followeeId, status, requestedAt(sort: Desc), id])
   @@index([followerId, status, followeeId])
@@ -361,58 +512,331 @@ model Follow {
 }
 
 model Story {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  ownerId String @map("owner_id") @db.Uuid
-  clientPublishId String @map("client_publish_id") @db.VarChar(100)
-  assetId String @map("asset_id") @db.Uuid
-  caption String? @db.VarChar(200)
-  audience String @default("followers") @db.VarChar(20)
-  state String @default("published") @db.VarChar(20)
-  revision Int @default(1)
-  publishedAt DateTime @default(now()) @map("published_at")
-  expiresAt DateTime @map("expires_at")
-  deletedAt DateTime? @map("deleted_at")
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId         String    @map("owner_id") @db.Uuid
+  clientPublishId String    @map("client_publish_id") @db.VarChar(100)
+  assetId         String    @map("asset_id") @db.Uuid
+  caption         String?   @db.VarChar(200)
+  audience        String    @default("followers") @db.VarChar(20)
+  state           String    @default("published") @db.VarChar(20)
+  revision        Int       @default(1)
+  publishedAt     DateTime  @default(now()) @map("published_at")
+  expiresAt       DateTime  @map("expires_at")
+  deletedAt       DateTime? @map("deleted_at")
+  /// How long the Story shows: a photo's chosen duration, or the video's length.
+  durationMs      Int?      @map("duration_ms")
+  /// Interactive stickers and music, drawn live by the viewer.
+  composition     Json?
+  batchId         String?   @map("batch_id") @db.Uuid
+  partIndex       Int?      @map("part_index")
+  partCount       Int?      @map("part_count")
+  musicTrackId    String?   @map("music_track_id") @db.VarChar(64)
+  /// Whether this Story goes to the owner's Archive when it ends. Copied from the owner's setting at posting.
+  archive         Boolean   @default(true)
+  /// Set 48 hours after publishedAt: the viewer list and likes are frozen into StoryInsight and their rows removed.
+  viewersClosedAt DateTime? @map("viewers_closed_at")
+  /// Set when the media is deleted from storage, for a story that ended without being archived, or was deleted.
+  purgedAt        DateTime? @map("purged_at")
+
   @@unique([ownerId, clientPublishId])
   @@index([ownerId, state, expiresAt])
   @@index([state, publishedAt(sort: Desc), id])
+  @@index([batchId])
+  @@index([ownerId, state, expiresAt(sort: Desc), id])
+  @@index([viewersClosedAt, expiresAt])
   @@map("stories")
 }
 
 model StoryMediaAsset {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  ownerId String @map("owner_id") @db.Uuid
-  objectKey String @unique @map("object_key") @db.VarChar(500)
-  contentType String @map("content_type") @db.VarChar(100)
-  maxBytes Int @map("max_bytes")
-  detectedType String? @map("detected_type") @db.VarChar(100)
-  checksum String? @db.VarChar(128)
-  thumbnailObjectKey String? @map("thumbnail_object_key") @db.VarChar(500)
-  status String @default("requested") @db.VarChar(24)
-  createdAt DateTime @default(now()) @map("created_at")
-  expiresAt DateTime @map("expires_at")
-  processedAt DateTime? @map("processed_at")
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// The nudity check's "lewd" probability, 0-1 (nudity.service.ts).
+  nudityScore Float? @map("nudity_score") @db.Real
+  ownerId            String    @map("owner_id") @db.Uuid
+  objectKey          String    @unique @map("object_key") @db.VarChar(500)
+  contentType        String    @map("content_type") @db.VarChar(100)
+  maxBytes           Int       @map("max_bytes")
+  detectedType       String?   @map("detected_type") @db.VarChar(100)
+  checksum           String?   @db.VarChar(128)
+  thumbnailObjectKey String?   @map("thumbnail_object_key") @db.VarChar(500)
+  status             String    @default("requested") @db.VarChar(24)
+  createdAt          DateTime  @default(now()) @map("created_at")
+  expiresAt          DateTime  @map("expires_at")
+  processedAt        DateTime? @map("processed_at")
+  /// S3 multipart upload id while the device's background worker uploads parts.
+  uploadId           String?   @map("upload_id") @db.VarChar(1024)
+  partSize           Int?      @map("part_size")
+  partCount          Int?      @map("part_count")
+  declaredBytes      BigInt?   @map("declared_bytes")
+
   @@index([ownerId, status])
   @@index([status, expiresAt])
   @@map("story_media_assets")
 }
 
+/// One Share action, posted in the background by the device.
+model StoryBatch {
+  id             String   @id @db.Uuid
+  ownerId        String   @map("owner_id") @db.Uuid
+  status         String   @default("posting") @db.VarChar(16)
+  itemCount      Int      @map("item_count")
+  /// The owner's session version when the batch began; a change revokes its publish token.
+  sessionVersion Int      @map("session_version")
+  /// followers ("Your story") or close_friends. Every item in the batch uses it.
+  audience       String   @default("followers") @db.VarChar(20)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at")
+  expiresAt      DateTime @map("expires_at")
+
+  @@index([ownerId, status])
+  @@index([status, updatedAt])
+  @@map("story_batches")
+}
+
+/// One item of a batch. Items publish in position order.
+model StoryBatchItem {
+  id            String   @id @db.Uuid
+  batchId       String   @map("batch_id") @db.Uuid
+  ownerId       String   @map("owner_id") @db.Uuid
+  position      Int
+  assetId       String   @unique @map("asset_id") @db.Uuid
+  kind          String   @db.VarChar(16)
+  durationMs    Int      @map("duration_ms")
+  composition   Json
+  partIndex     Int?     @map("part_index")
+  partCount     Int?     @map("part_count")
+  status        String   @default("uploading") @db.VarChar(16)
+  storyId       String?  @map("story_id") @db.Uuid
+  failureReason String?  @map("failure_reason") @db.VarChar(200)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([batchId, position])
+  @@map("story_batch_items")
+}
+
+model StorySticker {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storyId    String    @map("story_id") @db.Uuid
+  /// The sticker's id inside the Story's composition.
+  stickerKey String    @map("sticker_key") @db.VarChar(64)
+  type       String    @db.VarChar(24)
+  config     Json
+  endsAt     DateTime? @map("ends_at")
+  notifiedAt DateTime? @map("notified_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@unique([storyId, stickerKey])
+  @@index([type, endsAt, notifiedAt])
+  @@map("story_stickers")
+}
+
+/// A poll vote, quiz answer or slider rating: one per viewer per sticker.
+model StoryStickerResponse {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  stickerId String   @map("sticker_id") @db.Uuid
+  storyId   String   @map("story_id") @db.Uuid
+  viewerId  String   @map("viewer_id") @db.Uuid
+  value     Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([stickerId, viewerId])
+  @@index([storyId])
+  @@map("story_sticker_responses")
+}
+
+model StoryQuestionReply {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  stickerId String   @map("sticker_id") @db.Uuid
+  storyId   String   @map("story_id") @db.Uuid
+  viewerId  String   @map("viewer_id") @db.Uuid
+  text      String   @db.VarChar(300)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([stickerId, createdAt])
+  @@map("story_question_replies")
+}
+
+model StoryCountdownSubscription {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  stickerId  String    @map("sticker_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at")
+  notifiedAt DateTime? @map("notified_at")
+
+  @@unique([stickerId, userId])
+  @@map("story_countdown_subscriptions")
+}
+
+model StoryMention {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storyId         String   @map("story_id") @db.Uuid
+  mentionedUserId String   @map("mentioned_user_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@unique([storyId, mentionedUserId])
+  @@index([mentionedUserId])
+  @@map("story_mentions")
+}
+
+model StoryLinkTap {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  stickerId String   @map("sticker_id") @db.Uuid
+  storyId   String   @map("story_id") @db.Uuid
+  viewerId  String   @map("viewer_id") @db.Uuid
+  tappedAt  DateTime @default(now()) @map("tapped_at")
+
+  @@unique([stickerId, viewerId])
+  @@map("story_link_taps")
+}
+
+/// A viewer who unblurred a Reveal story by messaging its owner.
+model StoryRevealUnlock {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storyId   String   @map("story_id") @db.Uuid
+  viewerId  String   @map("viewer_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([storyId, viewerId])
+  @@index([viewerId])
+  @@map("story_reveal_unlocks")
+}
+
+/// An Add Yours prompt. Created by the first story that uses it; later stories join it.
+model StoryAddYoursThread {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  creatorId String   @map("creator_id") @db.Uuid
+  /// batch id and sticker key of the story that started it, so every part of a long video joins one thread.
+  sourceKey String   @unique @map("source_key") @db.VarChar(140)
+  prompt    String   @db.VarChar(80)
+  /// Add Yours Music: every story in the thread carries a song.
+  music     Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([creatorId])
+  @@map("story_add_yours_threads")
+}
+
+model StoryAddYoursEntry {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  threadId  String   @map("thread_id") @db.Uuid
+  storyId   String   @map("story_id") @db.Uuid
+  ownerId   String   @map("owner_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([threadId, storyId])
+  @@index([threadId, createdAt])
+  @@index([ownerId])
+  @@map("story_add_yours_entries")
+}
+
+/// A song used in a Story, kept so old Stories do not depend on the music API.
+model MusicTrack {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  provider        String   @db.VarChar(16)
+  providerTrackId String   @map("provider_track_id") @db.VarChar(64)
+  title           String   @db.VarChar(300)
+  artists         String   @db.VarChar(500)
+  album           String?  @db.VarChar(300)
+  durationMs      Int      @map("duration_ms")
+  language        String?  @db.VarChar(40)
+  explicit        Boolean  @default(false)
+  artworkUrl      String?  @map("artwork_url") @db.VarChar(1000)
+  sourceUrl       String?  @map("source_url") @db.VarChar(1000)
+  fetchedAt       DateTime @default(now()) @map("fetched_at")
+
+  @@unique([provider, providerTrackId])
+  @@map("music_tracks")
+}
+
+/// LRCLIB's answer for a song, including "not found".
+model MusicLyrics {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  provider        String   @db.VarChar(16)
+  providerTrackId String   @map("provider_track_id") @db.VarChar(64)
+  lrclibId        Int?     @map("lrclib_id")
+  status          String   @db.VarChar(16)
+  lines           Json?
+  plainText       String?  @map("plain_text")
+  checkedAt       DateTime @default(now()) @map("checked_at")
+
+  @@unique([provider, providerTrackId])
+  @@map("music_lyrics")
+}
+
 model StoryView {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storyId String @map("story_id") @db.Uuid
-  viewerId String @map("viewer_id") @db.Uuid
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storyId        String   @map("story_id") @db.Uuid
+  viewerId       String   @map("viewer_id") @db.Uuid
   firstVisibleAt DateTime @default(now()) @map("first_visible_at")
+
   @@unique([storyId, viewerId])
   @@index([storyId, firstVisibleAt(sort: Desc), id])
   @@map("story_views")
 }
 
+/// A private like on a Story. The author sees it in the viewer list.
+model StoryLike {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storyId   String   @map("story_id") @db.Uuid
+  viewerId  String   @map("viewer_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([storyId, viewerId])
+  @@index([viewerId, storyId])
+  @@map("story_likes")
+}
+
 model StoryPreference {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  viewerId String @map("viewer_id") @db.Uuid
-  authorId String @map("author_id") @db.Uuid
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  viewerId   String    @map("viewer_id") @db.Uuid
+  authorId   String    @map("author_id") @db.Uuid
   mutedUntil DateTime? @map("muted_until")
+
   @@unique([viewerId, authorId])
   @@map("story_preferences")
+}
+
+/// The owner's Close Friends list. Private: only the owner ever reads it.
+model StoryCloseFriend {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId   String   @map("owner_id") @db.Uuid
+  friendId  String   @map("friend_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([ownerId, friendId])
+  @@index([friendId])
+  @@map("story_close_friends")
+}
+
+/// Totals for one Story: navigation and interaction counts. Nobody, including the owner, can see who produced them.
+model StoryInsight {
+  storyId       String @id @map("story_id") @db.Uuid
+  views         Int    @default(0)
+  forwardTaps   Int    @default(0) @map("forward_taps")
+  backTaps      Int    @default(0) @map("back_taps")
+  nextStory     Int    @default(0) @map("next_story")
+  exits         Int    @default(0)
+  replies       Int    @default(0)
+  reactions     Int    @default(0)
+  profileVisits Int    @default(0) @map("profile_visits")
+  /// Frozen at 48 hours from story_views / story_likes / sticker response counts; null before the freeze.
+  reach         Int?
+  likes         Int?
+  stickerTaps   Int?   @map("sticker_taps")
+
+  @@map("story_insights")
+}
+
+/// People the owner's Stories are hidden from. They are never told.
+model StoryHiddenFrom {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId      String   @map("owner_id") @db.Uuid
+  hiddenUserId String   @map("hidden_user_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@unique([ownerId, hiddenUserId])
+  @@index([hiddenUserId])
+  @@map("story_hidden_from")
 }
 
 model ModerationCase {
@@ -453,22 +877,31 @@ model AccountDataRequest {
 }
 
 model ChatMediaAsset {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  matchId   String   @map("match_id") @db.Uuid
-  ownerId   String   @map("owner_id") @db.Uuid
-  objectKey String   @unique @map("object_key") @db.VarChar(500)
-  contentType String @map("content_type") @db.VarChar(100)
-  maxBytes Int       @map("max_bytes")
-  status    String   @default("requested") @db.VarChar(24)
-  detectedType String? @map("detected_type") @db.VarChar(100)
-  thumbnailObjectKey String? @map("thumbnail_object_key") @db.VarChar(500)
-  waveform Json?
-  processedAt DateTime? @map("processed_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  expiresAt DateTime @map("expires_at")
-  attachedAt DateTime? @map("attached_at")
-  match     Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
-  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// The nudity check's "lewd" probability, 0-1 (nudity.service.ts).
+  nudityScore Float? @map("nudity_score") @db.Real
+  /// Shown blurred to the receiver, with View and Report.
+  sensitive   Boolean @default(false)
+  matchId            String    @map("match_id") @db.Uuid
+  ownerId            String    @map("owner_id") @db.Uuid
+  objectKey          String    @unique @map("object_key") @db.VarChar(500)
+  contentType        String    @map("content_type") @db.VarChar(100)
+  maxBytes           Int       @map("max_bytes")
+  status             String    @default("requested") @db.VarChar(24)
+  detectedType       String?   @map("detected_type") @db.VarChar(100)
+  thumbnailObjectKey String?   @map("thumbnail_object_key") @db.VarChar(500)
+  waveform           Json?
+  processedAt        DateTime? @map("processed_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  expiresAt          DateTime  @map("expires_at")
+  attachedAt         DateTime? @map("attached_at")
+  match              Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  owner              User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  /// S3 multipart upload id while a resumable upload is in flight.
+  uploadId           String?   @map("upload_id") @db.VarChar(1024)
+  partSize           Int?      @map("part_size")
+  partCount          Int?      @map("part_count")
+  declaredBytes      BigInt?   @map("declared_bytes")
 
   @@index([matchId, status])
   @@index([ownerId, status])
@@ -476,21 +909,27 @@ model ChatMediaAsset {
 }
 
 model ProfileMediaAsset {
-  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  ownerId          String    @map("owner_id") @db.Uuid
-  objectKey        String    @unique @map("object_key") @db.VarChar(500)
-  previewObjectKey String?   @unique @map("preview_object_key") @db.VarChar(500)
-  purpose          String    @db.VarChar(24)
-  contentType      String    @map("content_type") @db.VarChar(100)
-  maxBytes         Int       @map("max_bytes")
-  status           String    @default("requested") @db.VarChar(24)
-  processingStatus String    @default("not_required") @map("processing_status") @db.VarChar(24)
-  processingError  String?   @map("processing_error") @db.VarChar(500)
-  processedAt      DateTime? @map("processed_at")
-  createdAt        DateTime  @default(now()) @map("created_at")
-  expiresAt        DateTime  @map("expires_at")
-  attachedAt       DateTime? @map("attached_at")
-  owner            User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// The nudity check's "lewd" probability, 0-1 (nudity.service.ts).
+  nudityScore Float? @map("nudity_score") @db.Real
+  ownerId           String    @map("owner_id") @db.Uuid
+  objectKey         String    @unique @map("object_key") @db.VarChar(500)
+  previewObjectKey  String?   @unique @map("preview_object_key") @db.VarChar(500)
+  cardObjectKey     String?   @map("card_object_key") @db.VarChar(500)
+  thumbObjectKey    String?   @map("thumb_object_key") @db.VarChar(500)
+  posterObjectKey   String?   @map("poster_object_key") @db.VarChar(500)
+  playbackObjectKey String?   @map("playback_object_key") @db.VarChar(500)
+  purpose           String    @db.VarChar(24)
+  contentType       String    @map("content_type") @db.VarChar(100)
+  maxBytes          Int       @map("max_bytes")
+  status            String    @default("requested") @db.VarChar(24)
+  processingStatus  String    @default("not_required") @map("processing_status") @db.VarChar(24)
+  processingError   String?   @map("processing_error") @db.VarChar(500)
+  processedAt       DateTime? @map("processed_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  expiresAt         DateTime  @map("expires_at")
+  attachedAt        DateTime? @map("attached_at")
+  owner             User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
   @@index([ownerId, status])
   @@map("profile_media_assets")
@@ -500,12 +939,20 @@ model Institution {
   id             String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   code           String              @unique @db.VarChar(40)
   name           String              @db.VarChar(255)
+  /// What people read in "Who you see" and on cards: "IEM", "UEM Newtown", "UEM Jaipur".
+  shortName      String?             @map("short_name") @db.VarChar(60)
   allowedDomains String[]            @map("allowed_domains")
   campuses       String[]            @default([])
+  /// Institutions run by one group (IEM-UEM) share this code; null means none.
+  groupCode      String?             @map("group_code") @db.VarChar(40)
+  /// The city the institution is in, for the "in my city" college scope.
+  city           String?             @db.VarChar(80)
   isActive       Boolean             @default(true) @map("is_active")
+  campusList     InstitutionCampus[]
   createdAt      DateTime            @default(now()) @map("created_at")
   updatedAt      DateTime            @default(now()) @updatedAt @map("updated_at")
   memberships    StudentMembership[]
+  claimedBy      User[]              @relation("ClaimedInstitution")
 
   @@map("institutions")
 }
@@ -519,6 +966,10 @@ model StudentMembership {
   verificationMethod String      @default("institution_email") @map("verification_method") @db.VarChar(40)
   verifiedAt         DateTime?   @map("verified_at")
   expiresAt          DateTime?   @map("expires_at")
+  /// False when the email domain is shared between institutions and nothing
+  /// has confirmed which one (LOCATION_SPEC.md 8.2). Keeps the member inside
+  /// their own institution until an admin confirms.
+  campusConfirmed    Boolean     @default(true) @map("campus_confirmed")
   createdAt          DateTime    @default(now()) @map("created_at")
   updatedAt          DateTime    @default(now()) @updatedAt @map("updated_at")
   user               User        @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -530,14 +981,14 @@ model StudentMembership {
 }
 
 model Swipe {
-  targetSignals Json? @map("target_signals")
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  swiperId  String   @map("swiper_id") @db.Uuid
-  targetId  String   @map("target_id") @db.Uuid
-  action    String   @db.VarChar(10)
-  createdAt DateTime @default(now()) @map("created_at")
-  swiper    User     @relation("SwipesMade", fields: [swiperId], references: [id], onDelete: Cascade)
-  target    User     @relation("SwipesReceived", fields: [targetId], references: [id], onDelete: Cascade)
+  targetSignals Json?    @map("target_signals")
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  swiperId      String   @map("swiper_id") @db.Uuid
+  targetId      String   @map("target_id") @db.Uuid
+  action        String   @db.VarChar(10)
+  createdAt     DateTime @default(now()) @map("created_at")
+  swiper        User     @relation("SwipesMade", fields: [swiperId], references: [id], onDelete: Cascade)
+  target        User     @relation("SwipesReceived", fields: [targetId], references: [id], onDelete: Cascade)
 
   @@unique([swiperId, targetId])
   @@index([swiperId, createdAt(sort: Desc), id], map: "swipes_actor_history_idx")
@@ -603,19 +1054,19 @@ model UserBlock {
 }
 
 model Notification {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  type      String   @db.VarChar(50)
-  title     String   @db.VarChar(255)
-  body      String
-  data      Json?
-  actionUrl String?  @map("action_url") @db.VarChar(500)
-  deliveryKey String? @unique @map("delivery_key") @db.VarChar(255)
-  outboxEventId String? @map("outbox_event_id") @db.Uuid
-  pushSentAt DateTime? @map("push_sent_at")
-  isRead    Boolean  @default(false) @map("is_read")
-  createdAt DateTime @default(now()) @map("created_at")
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  type          String    @db.VarChar(50)
+  title         String    @db.VarChar(255)
+  body          String
+  data          Json?
+  actionUrl     String?   @map("action_url") @db.VarChar(500)
+  deliveryKey   String?   @unique @map("delivery_key") @db.VarChar(255)
+  outboxEventId String?   @map("outbox_event_id") @db.Uuid
+  pushSentAt    DateTime? @map("push_sent_at") @db.Timestamptz(6)
+  isRead        Boolean   @default(false) @map("is_read")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, isRead])
   @@index([userId, createdAt])
@@ -624,20 +1075,20 @@ model Notification {
 }
 
 model OutboxEvent {
-  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  topic          String    @db.VarChar(80)
-  aggregateId    String    @map("aggregate_id") @db.Uuid
-  deduplicationKey String  @unique @map("deduplication_key") @db.VarChar(255)
-  payloadVersion Int       @default(1) @map("payload_version")
-  payload        Json
-  status         String    @default("pending") @db.VarChar(20)
-  attempts       Int       @default(0)
-  availableAt    DateTime  @default(now()) @map("available_at")
-  lockedAt       DateTime? @map("locked_at")
-  lockedBy       String?   @map("locked_by") @db.VarChar(100)
-  lastError      String?   @map("last_error") @db.VarChar(500)
-  completedAt    DateTime? @map("completed_at")
-  createdAt      DateTime  @default(now()) @map("created_at")
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  topic            String    @db.VarChar(80)
+  aggregateId      String    @map("aggregate_id") @db.Uuid
+  deduplicationKey String    @unique @map("deduplication_key") @db.VarChar(255)
+  payloadVersion   Int       @default(1) @map("payload_version")
+  payload          Json
+  status           String    @default("pending") @db.VarChar(20)
+  attempts         Int       @default(0)
+  availableAt      DateTime  @default(now()) @map("available_at")
+  lockedAt         DateTime? @map("locked_at")
+  lockedBy         String?   @map("locked_by") @db.VarChar(100)
+  lastError        String?   @map("last_error") @db.VarChar(500)
+  completedAt      DateTime? @map("completed_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
 
   @@index([status, availableAt, createdAt])
   @@index([aggregateId])
@@ -666,17 +1117,17 @@ model AnalyticsEvent {
 /// model training. None of this can be backfilled, so it must be collected
 /// from the start.
 model ProfileImpression {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  viewerId    String   @map("viewer_id") @db.Uuid
-  shownId     String   @map("shown_id") @db.Uuid
-  day         DateTime @db.Date
-  count       Int      @default(1)
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  viewerId     String   @map("viewer_id") @db.Uuid
+  shownId      String   @map("shown_id") @db.Uuid
+  day          DateTime @db.Date
+  count        Int      @default(1)
   /// Best (lowest) position this profile held in the viewer's deck.
-  bestPosition Int?    @map("best_position")
+  bestPosition Int?     @map("best_position")
   /// Set once the viewer swipes on this profile - gives CTR without a join.
-  acted       Boolean  @default(false)
-  firstSeenAt DateTime @default(now()) @map("first_seen_at")
-  lastSeenAt  DateTime @default(now()) @updatedAt @map("last_seen_at")
+  acted        Boolean  @default(false)
+  firstSeenAt  DateTime @default(now()) @map("first_seen_at")
+  lastSeenAt   DateTime @default(now()) @updatedAt @map("last_seen_at")
 
   viewer User @relation("ImpressionViewer", fields: [viewerId], references: [id], onDelete: Cascade)
   shown  User @relation("ImpressionShown", fields: [shownId], references: [id], onDelete: Cascade)
@@ -693,6 +1144,11 @@ model DeviceToken {
   userId    String   @map("user_id") @db.Uuid
   token     String   @db.VarChar(500)
   platform  String   @db.VarChar(20)
+  /// What this phone's app can do (MESSAGE_NOTIFICATIONS_PLAN.md): "chat_v2" = draws chat notifications itself.
+  capabilities String[] @default([])
+  /// This phone's push encryption key, sealed with the server's secret (MESSAGE_NOTIFICATIONS_PLAN.md 11):
+  /// chat pushes to it are AES-256-GCM encrypted, so Google sees nothing.
+  pushKey      String?  @map("push_key") @db.VarChar(200)
   createdAt DateTime @default(now()) @map("created_at")
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -700,28 +1156,442 @@ model DeviceToken {
   @@map("device_tokens")
 }
 
+/// Every push sent (NOTIFICATIONS_PLAN.md 13): opened or not, and which line it
+/// used - the open rates, and the back-off for "spicy" ones (5).
+model PushLog {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  category       String    @db.VarChar(40)
+  kind           String    @db.VarChar(60)
+  template       String?   @db.VarChar(80)
+  spicy          Boolean   @default(false)
+  notificationId String?   @map("notification_id") @db.Uuid
+  /// One row per outbox event, so a retried delivery is not counted twice.
+  dedupeKey      String?   @unique @map("dedupe_key") @db.VarChar(255)
+  sentAt         DateTime  @default(now()) @map("sent_at") @db.Timestamptz(6)
+  openedAt       DateTime? @map("opened_at") @db.Timestamptz(6)
+  openedAction   String?   @map("opened_action") @db.VarChar(40)
+  /// The person switched this type off within 10 minutes of it arriving.
+  turnedOffAt    DateTime? @map("turned_off_at") @db.Timestamptz(6)
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, sentAt])
+  @@index([kind, sentAt])
+  @@map("push_log")
+}
+
+/// A push held back by quiet hours (NOTIFICATIONS_PLAN.md 5), sent in the morning unless expired.
+model PushQueue {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  payload   Json
+  sendAfter DateTime @map("send_after") @db.Timestamptz(6)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([sendAfter])
+  @@index([userId])
+  @@map("push_queue")
+}
+
+/// When this person uses the app, and how far the timed pushes have gone (NOTIFICATIONS_PLAN.md 4-5).
+model PushEngagement {
+  userId           String    @id @map("user_id") @db.Uuid
+  /// Opens per hour of the day (IST), index 0 = midnight.
+  activeHours      Int[]     @default([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) @map("active_hours")
+  /// The hour they open the app most; null until there is enough to tell.
+  bestHour         Int?      @map("best_hour") @db.SmallInt
+  /// Comeback pushes sent since they were last active: 1 = day 3, 2 = day 7, 3 = day 14 (then none).
+  comebackLevel    Int       @default(0) @map("comeback_level") @db.SmallInt
+  spicyPausedUntil DateTime? @map("spicy_paused_until") @db.Timestamptz(6)
+  lastStandoutsAt  DateTime? @map("last_standouts_at") @db.Timestamptz(6)
+  lastNewPeopleAt  DateTime? @map("last_new_people_at") @db.Timestamptz(6)
+  lastTipAt        DateTime? @map("last_tip_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("push_engagement")
+}
+
 /// A server-issued card receipt. Visibility is acknowledged once by the client.
 model DiscoveryReceipt {
-  id         String   @id @db.Uuid
-  viewerId   String   @map("viewer_id") @db.Uuid
-  candidateId String  @map("candidate_id") @db.Uuid
-  deckId     String   @map("deck_id") @db.Uuid
-  sequence   Int
-  algorithm  Int
-  deliveredAt DateTime @default(now()) @map("delivered_at")
-  visibleAt  DateTime? @map("visible_at")
+  id          String    @id @db.Uuid
+  viewerId    String    @map("viewer_id") @db.Uuid
+  candidateId String    @map("candidate_id") @db.Uuid
+  deckId      String    @map("deck_id") @db.Uuid
+  sequence    Int
+  algorithm   Int
+  deliveredAt DateTime  @default(now()) @map("delivered_at")
+  visibleAt   DateTime? @map("visible_at")
+
   @@unique([viewerId, deckId, sequence])
   @@index([deliveredAt])
   @@index([candidateId, visibleAt])
   @@map("discovery_receipts")
 }
 
+/// One Rose: a higher-priority Like that sits at the top of the recipient's
+/// Likes You, with an optional short comment (EXPLORE_SPEC.md, section 10).
+model Rose {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  senderId    String   @map("sender_id") @db.Uuid
+  recipientId String   @map("recipient_id") @db.Uuid
+  swipeId     String?  @map("swipe_id") @db.Uuid
+  comment     String?  @db.VarChar(140)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([recipientId, createdAt(sort: Desc)])
+  @@index([senderId, recipientId, createdAt(sort: Desc)])
+  @@map("roses")
+}
+
 model ShadowRanking {
-  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  viewerId String @map("viewer_id") @db.Uuid
-  deckId String @map("deck_id") @db.Uuid
-  report Json
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  viewerId  String   @map("viewer_id") @db.Uuid
+  deckId    String   @map("deck_id") @db.Uuid
+  report    Json
   createdAt DateTime @default(now()) @map("created_at")
+
   @@index([createdAt])
   @@map("shadow_rankings")
+}
+
+/// A campus of an institution, with public coordinates (LOCATION_SPEC.md 8.1).
+/// Coordinates are institutional, not personal; null until an admin sets them.
+model InstitutionCampus {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  institutionId String      @map("institution_id") @db.Uuid
+  code          String      @db.VarChar(40)
+  name          String      @db.VarChar(120)
+  latitude      Decimal?    @db.Decimal(9, 6)
+  longitude     Decimal?    @db.Decimal(9, 6)
+  sortOrder     Int         @default(0) @map("sort_order")
+  isActive      Boolean     @default(true) @map("is_active")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  institution   Institution @relation(fields: [institutionId], references: [id])
+  users         User[]
+
+  @@unique([institutionId, code])
+  @@index([institutionId])
+  @@map("institution_campuses")
+}
+
+/// A place someone saved while standing in it (LOCATION_SPEC.md 7). Stored as
+/// a grid cell and a private label, never an address.
+model SavedPlace {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  label         String   @db.VarChar(24)
+  latitude      Decimal  @db.Decimal(9, 6)
+  longitude     Decimal  @db.Decimal(9, 6)
+  hideHere      Boolean  @default(false) @map("hide_here")
+  lastVisitedAt DateTime @default(now()) @map("last_visited_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@unique([userId, latitude, longitude])
+  @@index([userId])
+  @@index([lastVisitedAt])
+  @@map("saved_places")
+}
+
+/// A public place people can pin to their map profile (LOCATION_SPEC.md 9.2).
+/// Only ever created from a place search result the server itself served, or
+/// from a campus, so nobody can mint a "place" at someone's hostel.
+model MapPlace {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source     String   @db.VarChar(16)
+  externalId String   @unique @map("external_id") @db.VarChar(160)
+  name       String   @db.VarChar(120)
+  subtitle   String?  @db.VarChar(200)
+  /// What kind of place it is (Cafe, Restaurant, Park...), from OpenStreetMap.
+  category   String?  @db.VarChar(40)
+  latitude   Decimal  @db.Decimal(9, 6)
+  longitude  Decimal  @db.Decimal(9, 6)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([latitude, longitude])
+  @@map("map_places")
+}
+
+/// The map spots someone chose to appear at. Opt-in, at most three.
+model UserMapPlace {
+  userId    String   @map("user_id") @db.Uuid
+  placeId   String   @map("place_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@id([userId, placeId])
+  @@index([placeId])
+  @@map("user_map_places")
+}
+
+/// One reader's Standouts for one day (STANDOUTS_LIKES_SPEC.md 5.3). A row,
+/// not a cache entry, so the set and the exposure counts survive Redis.
+model StandoutDay {
+  viewerId  String   @map("viewer_id") @db.Uuid
+  /// The IST calendar day, as `istDay()`.
+  day       String   @db.VarChar(10)
+  picks     String[] @db.Uuid
+  /// "Not for me": hidden, never a Pass. Kept 30 days (STANDOUTS_PLAN.md 5.1).
+  hidden    String[] @default([]) @db.Uuid
+  /// Each pick's slot, in the same order as `picks`: best, new or wildcard.
+  slots     String[] @default([])
+  /// The viewer's taste profile that day, learned from their swipes (5.3).
+  taste     Json?
+  /// Which algorithm chose the day: v2 (per open) or v3 (STANDOUTS_PLAN.md).
+  version   String   @default("v2") @db.VarChar(8)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@id([viewerId, day])
+  @@index([day])
+  @@map("standout_days")
+}
+
+/// One night run of Standouts v3 (STANDOUTS_PLAN.md 6): what it did, and the
+/// fairness limits it used, which the first-open fallback reuses that day.
+model StandoutRun {
+  day        String    @id @db.VarChar(10)
+  startedAt  DateTime  @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  /// "live" wrote the day's sets; "shadow" only compared (v3 switched off).
+  mode       String    @db.VarChar(8)
+  viewers    Int       @default(0)
+  sets       Int       @default(0)
+  shortSets  Int       @default(0) @map("short_sets")
+  relaxed    Int       @default(0)
+  durationMs Int       @default(0) @map("duration_ms")
+  /// { "<institutionId>:<category>": limit }
+  limits     Json      @default("{}")
+
+  @@map("standout_runs")
+}
+
+/// Shadow mode: the set v3 would have chosen, beside the one v2 served.
+model StandoutShadow {
+  viewerId String   @map("viewer_id") @db.Uuid
+  day      String   @db.VarChar(10)
+  picks    String[] @db.Uuid
+  slots    String[] @default([])
+
+  @@id([viewerId, day])
+  @@map("standout_shadow")
+}
+
+/// A banned person's identities, blocked from signing up again (GOOGLE_SIGNUP_PLAN.md 6.1).
+/// Stored as a keyed hash of the normalized value, never the value itself.
+model BannedIdentifier {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// google_sub, email, college_email or android_id
+  kind      String   @db.VarChar(20)
+  valueHash String   @map("value_hash") @db.VarChar(64)
+  userId    String?  @map("user_id") @db.Uuid
+  reason    String?  @db.VarChar(200)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([kind, valueHash])
+  @@map("banned_identifiers")
+}
+
+/// A second birthday change, asked through support with an ID photo (GOOGLE_SIGNUP_PLAN.md 6.2).
+/// The photo is deleted once the request is decided.
+model BirthdayChangeRequest {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  newBirthday DateTime  @map("new_birthday") @db.Date
+  idObjectKey String?   @map("id_object_key") @db.VarChar(500)
+  status      String    @default("pending") @db.VarChar(20)
+  decidedAt   DateTime? @map("decided_at")
+  decidedBy   String?   @map("decided_by") @db.Uuid
+  note        String?   @db.VarChar(300)
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([status, createdAt])
+  @@index([userId])
+  @@map("birthday_change_requests")
+}
+
+/// The real-person check, one row per person (PHOTO_VERIFICATION_PLAN.md).
+/// status: verified | needs_fix | pending_review | failed | removed
+model FaceVerification {
+  userId        String    @id @map("user_id") @db.Uuid
+  status        String    @db.VarChar(20)
+  reason        String?   @db.VarChar(60)
+  verifiedAt    DateTime? @map("verified_at")
+  failureStreak Int       @default(0) @map("failure_streak")
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@map("face_verifications")
+}
+
+/// The face key: 128 numbers, encrypted at rest - never a picture. Deleted on request and with the account.
+model FaceKey {
+  userId    String   @id @map("user_id") @db.Uuid
+  cipher    String
+  model     String   @db.VarChar(60)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("face_keys")
+}
+
+/// One selfie attempt: random actions, one use, two minutes.
+model FaceChallenge {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  actions   String[]
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  result    String?   @db.VarChar(30)
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@map("face_challenges")
+}
+
+/// Unsure cases for a person to decide. Snapshots are kept only here, and deleted on decision or after 7 days.
+model FaceReviewCase {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  reason       String    @db.VarChar(60)
+  snapshotKeys String[]  @map("snapshot_keys")
+  details      Json      @default("{}")
+  status       String    @default("pending") @db.VarChar(20)
+  decidedBy    String?   @map("decided_by") @db.Uuid
+  decidedAt    DateTime? @map("decided_at")
+  note         String?   @db.VarChar(300)
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([status, createdAt])
+  @@index([userId])
+  @@map("face_review_cases")
+}
+
+/// Each photo and video checked against the face key, by its address (rows survive photo reordering).
+/// status: match | unsure | mismatch | no_face
+model FaceMediaCheck {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  mediaUrl  String   @map("media_url") @db.VarChar(500)
+  kind      String   @db.VarChar(10)
+  status    String   @db.VarChar(20)
+  distance  Float?
+  checkedAt DateTime @default(now()) @map("checked_at")
+
+  @@unique([userId, mediaUrl])
+  @@map("face_media_checks")
+}
+
+/// Every action taken in the admin panel: who, what, on whom, when (ADMIN_PANEL_PLAN.md).
+model AdminAuditLog {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  adminId    String   @map("admin_id") @db.Uuid
+  action     String   @db.VarChar(80)
+  targetType String?  @map("target_type") @db.VarChar(40)
+  targetId   String?  @map("target_id") @db.VarChar(80)
+  details    Json     @default("{}")
+  statusCode Int?     @map("status_code")
+  ip         String?  @db.VarChar(64)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([adminId, createdAt])
+  @@index([targetId])
+  @@map("admin_audit_logs")
+}
+
+/// An appeal against a hide, suspension or ban, from the public appeal page (docs/SAFETY_PROCESSES.md).
+model Appeal {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String?   @map("user_id") @db.Uuid
+  email     String    @db.VarChar(254)
+  message   String    @db.VarChar(2000)
+  status    String    @default("pending") @db.VarChar(20)
+  decidedBy String?   @map("decided_by") @db.Uuid
+  decidedAt DateTime? @map("decided_at")
+  note      String?   @db.VarChar(500)
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([status, createdAt])
+  @@index([userId])
+  @@map("appeals")
+}
+
+/// A photo, video or story the team decides on after the nudity check (docs/NUDITY_CHECK.md).
+model MediaModeration {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  /// profile_photo | profile_video | story
+  kind      String    @db.VarChar(20)
+  assetId   String?   @map("asset_id") @db.Uuid
+  storyId   String?   @map("story_id") @db.Uuid
+  objectKey String?   @map("object_key") @db.VarChar(500)
+  mediaUrl  String?   @map("media_url") @db.VarChar(1000)
+  score     Float?    @db.Real
+  /// pending (waiting for the team) | blocked (refused at upload) | approved | removed | withdrawn | unchecked (service was down)
+  status    String    @db.VarChar(20)
+  decidedBy String?   @map("decided_by") @db.Uuid
+  decidedAt DateTime? @map("decided_at")
+  note      String?   @db.VarChar(300)
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([status, createdAt])
+  @@index([userId, createdAt])
+  @@index([mediaUrl])
+  @@map("media_moderations")
+}
+
+/// A bug or "not working" report from the app (docs/FEEDBACK.md).
+model BugReport {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reference      Int       @unique @default(dbgenerated("nextval('bug_report_reference_seq'::regclass)"))
+  userId         String    @map("user_id") @db.Uuid
+  clientId       String    @map("client_id") @db.VarChar(64)
+  area           String    @db.VarChar(30)
+  description    String
+  source         String    @default("form") @db.VarChar(20)
+  status         String    @default("received") @db.VarChar(20)
+  diagnostics    Json?
+  fixedInVersion String?   @map("fixed_in_version") @db.VarChar(30)
+  duplicateOf    String?   @map("duplicate_of") @db.Uuid
+  staffNote      String?   @map("staff_note")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  closedAt       DateTime? @map("closed_at") @db.Timestamptz(6)
+  attachments    BugReportAttachment[]
+
+  @@unique([userId, clientId])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("bug_reports")
+}
+
+model BugReportAttachment {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reportId    String    @map("report_id") @db.Uuid
+  kind        String    @db.VarChar(10)
+  objectKey   String    @map("object_key") @db.VarChar(500)
+  contentType String    @map("content_type") @db.VarChar(60)
+  maxBytes    Int       @map("max_bytes")
+  sizeBytes   Int?      @map("size_bytes")
+  status      String    @default("requested") @db.VarChar(20)
+  nudityScore Float?    @map("nudity_score") @db.Real
+  sensitive   Boolean   @default(false)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  report      BugReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([reportId])
+  @@map("bug_report_attachments")
+}
+
+/// The in-app "How's IEM Connect so far?" score.
+model AppRating {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  score      Int      @db.SmallInt
+  comment    String?
+  appVersion String?  @map("app_version") @db.VarChar(30)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("app_ratings")
 }
