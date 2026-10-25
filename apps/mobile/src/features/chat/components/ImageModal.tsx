@@ -10,6 +10,8 @@ import {
   Text,
   FlatList,
   ScrollView,
+  Alert,
+  Share,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
@@ -25,6 +27,9 @@ import {
   GestureDetector,
   Gesture,
 } from 'react-native-gesture-handler';
+import { VideoView, useVideoPlayer } from 'expo-video';
+import * as MediaLibrary from 'expo-media-library';
+import { Directory, File as FileSystemFile, Paths } from 'expo-file-system';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -118,15 +123,26 @@ const ZoomableImage = ({ uri, onZoomChange }: ZoomableImageProps) => {
   );
 };
 
+const ViewerVideo = ({ uri }: { uri: string }) => {
+  const player = useVideoPlayer({ uri }, (video) => {
+    video.loop = false;
+    video.play();
+  });
+  return <VideoView player={player} style={styles.image} contentFit="contain" nativeControls />;
+};
+
 interface ImageModalProps {
   isVisible: boolean;
   imageUrls: string[];
   initialIndex: number;
   caption?: string | null;
+  mediaTypes?: Array<'image' | 'video'>;
+  /** Stills for the strip, where a video's own URL cannot be drawn. */
+  thumbnailUrls?: Array<string | null>;
   onClose: () => void;
 }
 
-export const ImageModal = ({ isVisible, imageUrls, initialIndex, caption, onClose }: ImageModalProps) => {
+export const ImageModal = ({ isVisible, imageUrls, initialIndex, caption, mediaTypes = [], thumbnailUrls, onClose }: ImageModalProps) => {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [scrollEnabled, setScrollEnabled] = useState(true);
   const flatListRef = useRef<FlatList>(null);
@@ -144,6 +160,31 @@ export const ImageModal = ({ isVisible, imageUrls, initialIndex, caption, onClos
   const handleZoomChange = useCallback((zoomed: boolean) => {
     setScrollEnabled(!zoomed);
   }, []);
+
+  const saveCurrent = useCallback(async () => {
+    try {
+      const permission = await MediaLibrary.requestPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Permission needed', 'Allow photo and video access to save this item.');
+        return;
+      }
+      let uri = imageUrls[currentIndex];
+      if (/^https?:\/\//i.test(uri)) {
+        const directory = new Directory(Paths.cache, 'chat-viewer');
+        directory.create({ idempotent: true, intermediates: true });
+        uri = (await FileSystemFile.downloadFileAsync(uri, directory, { idempotent: true })).uri;
+      }
+      await MediaLibrary.saveToLibraryAsync(uri);
+      Alert.alert('Saved', 'The item is in your media library.');
+    } catch {
+      Alert.alert('Save failed', 'The item could not be saved.');
+    }
+  }, [currentIndex, imageUrls]);
+
+  const shareCurrent = useCallback(async () => {
+    const uri = imageUrls[currentIndex];
+    if (uri) await Share.share({ message: uri, url: uri });
+  }, [currentIndex, imageUrls]);
 
   if (!imageUrls || imageUrls.length === 0) return null;
 
@@ -189,9 +230,13 @@ export const ImageModal = ({ isVisible, imageUrls, initialIndex, caption, onClos
             offset: SCREEN_WIDTH * index,
             index,
           })}
-          renderItem={({ item }) => (
+          renderItem={({ item, index }) => (
             <GestureHandlerRootView style={styles.gestureContainer}>
-              <ZoomableImage uri={item} onZoomChange={handleZoomChange} />
+              {mediaTypes[index] === 'video' ? (
+                <ViewerVideo uri={item} />
+              ) : (
+                <ZoomableImage uri={item} onZoomChange={handleZoomChange} />
+              )}
             </GestureHandlerRootView>
           )}
         />
@@ -219,12 +264,22 @@ export const ImageModal = ({ isVisible, imageUrls, initialIndex, caption, onClos
                       currentIndex === index && styles.thumbnailCardActive
                     ]}
                   >
-                    <Animated.Image source={{ uri: url }} style={styles.thumbnail} />
+                    <Animated.Image source={{ uri: thumbnailUrls?.[index] ?? url }} style={styles.thumbnail} />
                   </TouchableOpacity>
                 ))}
               </ScrollView>
             </View>
           )}
+          <View style={styles.viewerActions}>
+            <TouchableOpacity style={styles.viewerAction} onPress={() => void saveCurrent()} accessibilityRole="button" accessibilityLabel="Save media">
+              <Ionicons name="download-outline" size={22} color="#fff" />
+              <Text style={styles.viewerActionText}>Save</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.viewerAction} onPress={() => void shareCurrent()} accessibilityRole="button" accessibilityLabel="Share media">
+              <Ionicons name="share-outline" size={22} color="#fff" />
+              <Text style={styles.viewerActionText}>Share</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     </Modal>
@@ -303,4 +358,7 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  viewerActions: { flexDirection: 'row', justifyContent: 'center', gap: 34, paddingTop: 8 },
+  viewerAction: { minWidth: 58, alignItems: 'center', gap: 2 },
+  viewerActionText: { color: '#fff', fontSize: 12 },
 });
