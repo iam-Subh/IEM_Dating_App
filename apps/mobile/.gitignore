@@ -32,6 +32,9 @@ yarn-error.*
 
 # local env files
 .env*.local
+google-services.json
+fcm-v1-service-account.json
+*firebase-adminsdk*.json
 
 # typescript
 *.tsbuildinfo
@@ -39,3 +42,10 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Mappls credentials (copied into android/app by plugins/withMapplsConfig.js)
+/mappls/
+*.a.olf
+*.a.conf
+*.i.olf
+*.i.conf
