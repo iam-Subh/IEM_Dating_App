@@ -2,8 +2,10 @@ import axios from 'axios';
 import { store } from '../store';
 import { logout, setAccessToken } from '../store/authSlice';
 import { credentialStore } from './credentialStore';
+import { DEVICE_INFO_HEADER } from './deviceInfo';
 
 import { Platform } from 'react-native';
+import {isOnboardingPreview, onboardingPreviewResponse} from '../development/onboardingPreviewRuntime';
 
 const configuredApiUrl = process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/, '');
 if (!configuredApiUrl && !__DEV__) throw new Error('EXPO_PUBLIC_API_URL is required');
@@ -16,6 +18,8 @@ export const api = axios.create({
   timeout: 30000, // 30s — allows for Neon DB cold start (auto-resume from suspend)
   headers: {
     'ngrok-skip-browser-warning': 'true',
+    // This phone, for Active sessions (see deviceInfo.ts).
+    'X-Device-Info': DEVICE_INFO_HEADER,
   },
 });
 
@@ -46,8 +50,39 @@ async function refreshAccessToken(refreshToken: string, key: string): Promise<st
   return next.accessToken;
 }
 
+/**
+ * Renews the access token outside a failing request - after an offline start,
+ * once the network is back. Goes through the same single in-flight refresh as
+ * the 401 handler below, so the two can never spend one refresh token twice
+ * (the server would read that as reuse and end the session).
+ *
+ * 'invalid' only when the server says so (401/403); anything else - no
+ * network, a timeout, a 5xx - is 'offline', and the session is kept.
+ */
+export async function renewSession(): Promise<'ok' | 'invalid' | 'offline' | 'none'> {
+  const refreshToken = await credentialStore.getRefreshToken();
+  if (!refreshToken) return 'none';
+  const key = sessionKey();
+  try {
+    if (!refreshPromise || refreshSession !== key) {
+      refreshSession = key;
+      const pending = refreshAccessToken(refreshToken, key).finally(() => {
+        if (refreshPromise === pending) { refreshPromise = null; refreshSession = null; }
+      });
+      refreshPromise = pending;
+    }
+    await refreshPromise;
+    return 'ok';
+  } catch (error: any) {
+    return [401, 403].includes(error?.response?.status) ? 'invalid' : 'offline';
+  }
+}
+
 api.interceptors.request.use(
   (config) => {
+    if (__DEV__ && isOnboardingPreview()) {
+      config.adapter = async request => ({data: {success: true, data: onboardingPreviewResponse(request.url ?? '', request.method ?? 'get')}, status: 200, statusText: 'OK', headers: {}, config: request});
+    }
     const scoped = config as typeof config & { _sessionKey?: string };
     if (scoped._sessionKey !== undefined) requireSession(scoped._sessionKey);
     else scoped._sessionKey = sessionKey();
@@ -69,13 +104,27 @@ api.interceptors.response.use(
     return response;
   },
   async (error) => {
+    // Something that waits for a college verification: the rules screen
+    // answers it, wherever the request came from (GOOGLE_SIGNUP_PLAN.md 2.4).
+    if (error.response?.status === 403 || error.response?.status === 429) {
+      const { showVerifyRules } = await import('../features/verification/verifyGate');
+      showVerifyRules(error);
+    }
     if (!error.response || error.code === 'ECONNABORTED') {
       console.warn('[Offline Mode]: Network Error detected, falling back to cached cache layers strategy...');
       // Logic for pushing failed requests to an AsyncStorage offline-queue
     }
-    const original = error.config as (typeof error.config & { _retried?: boolean; _sessionKey?: string });
+    const original = error.config as (typeof error.config & { _retried?: boolean; _busyRetried?: boolean; _sessionKey?: string });
     const key = original?._sessionKey ?? sessionKey();
     if (key !== sessionKey()) return Promise.reject(error);
+    // The server couldn't check the sign-in this moment (it was restarting):
+    // nothing was done, so once more shortly is safe - and no session renewal.
+    if (error.response?.status === 503 && error.response?.data?.code === 'AUTH_CHECK_UNAVAILABLE' && original && !original._busyRetried) {
+      original._busyRetried = true;
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      requireSession(key);
+      return api(original);
+    }
     if (error.response?.status === 401 && original && !original._retried && !original.url?.includes('/auth/refresh')) {
       original._retried = true;
       // A delayed 401 can arrive after another request has rotated the token.
@@ -102,17 +151,21 @@ api.interceptors.response.use(
           return api(original);
         } catch (refreshError: any) {
           if (key !== sessionKey() || ![401, 403].includes(refreshError?.response?.status)) return Promise.reject(error);
-          const [{ disconnectSocket }, { clearOfflineQueue }, { resetChatState }, { resetDiscoverState }] = await Promise.all([
+          const [{ disconnectSocket }, { clearOfflineQueue }, { resetChatState }, { resetDiscoverState }, { resetLocationSession }, { clearNativeChatAccount }] = await Promise.all([
             import('./socket'), import('./offlineQueue'), import('../store/chatSlice'), import('../store/discoverSlice'),
+            import('../features/location/locationClient'), import('../../modules/chat-timeline'),
           ]);
           requireSession(key);
+          const accountId = store.getState().auth.user?.id;
           const clearQueue = clearOfflineQueue();
           const clearCredentials = credentialStore.clear();
+          const clearNativeMessages = clearNativeChatAccount(accountId ?? '');
           disconnectSocket();
+          resetLocationSession();
           store.dispatch(resetChatState());
           store.dispatch(resetDiscoverState());
           store.dispatch(logout());
-          await Promise.all([clearQueue, clearCredentials]);
+          await Promise.all([clearQueue, clearCredentials, clearNativeMessages]);
         }
       }
     }

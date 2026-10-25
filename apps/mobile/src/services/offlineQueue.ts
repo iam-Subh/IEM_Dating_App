@@ -17,6 +17,7 @@ export interface QueuedMessage {
   replyToId?: string;
   /** Failed send count. Used to drop a message that can never be delivered. */
   attempts?: number;
+  error?: string;
 }
 
 
@@ -78,6 +79,24 @@ const recordAttempt = async (tempId: string, key: string | null, attempts: numbe
     }
   });
 
+export const updateQueuedMessage = async (
+  tempId: string,
+  update: Partial<Pick<QueuedMessage, 'status' | 'attempts' | 'error'>>,
+) => {
+  const key = queueKey();
+  return serialize(async () => {
+    if (!key) return;
+    const existing = await readQueue(key);
+    await AsyncStorage.setItem(
+      key,
+      JSON.stringify(existing.map((message) => message.tempId === tempId ? { ...message, ...update } : message)),
+    );
+  });
+};
+
+export const retryQueuedMessage = async (tempId: string) =>
+  updateQueuedMessage(tempId, { status: 'pending', attempts: 0, error: undefined });
+
 const removeFromAccountQueue = async (tempId: string, key: string | null) => serialize(async () => {
   try {
     if (!key) return;
@@ -105,10 +124,13 @@ export const clearOfflineQueue = async () => {
 // Retry messages when connection restores.
 // onMessageConfirmed fires IMMEDIATELY per-message (not batched) to prevent
 // race condition with the server's new_message broadcast.
-export const retryOfflineMessages = async (
+type StatusCallback = (queuedMsg: QueuedMessage, status: 'queued' | 'sending' | 'failed', error?: string) => void;
+
+const sendQueuedMessages = async (
   socket: Socket,
   matchId: string,
   onMessageConfirmed?: (queuedMsg: QueuedMessage, serverMessage: any) => void,
+  onMessageStatus?: StatusCallback,
 ): Promise<QueuedMessage[]> => {
   const key = queueKey();
   const token = store.getState().auth.token;
@@ -133,7 +155,10 @@ export const retryOfflineMessages = async (
   // Send sequentially in correct order
   for (const item of matchQueue) {
     if (!socket.connected || !isCurrentAccount()) break;
+    onMessageStatus?.(item, 'sending');
+    await updateQueuedMessage(item.tempId, { status: 'sending', error: undefined });
     let failureCode: string | null = null;
+    let failureMessage = 'No response from the server. Check your connection and retry.';
     try {
       await new Promise<void>((resolve) => {
         let settled = false;
@@ -156,16 +181,18 @@ export const retryOfflineMessages = async (
           settled = true;
           clearTimeout(timeout);
           if (!isCurrentAccount()) { resolve(); return; }
-          if (response?.success) {
+          if (response?.success && typeof response.message?.id === 'string' && response.message.id) {
             successfulSends.push(item);
             // CRITICAL: Fire callback IMMEDIATELY so processedServerIdsRef is updated
             // BEFORE the new_message broadcast arrives (prevents race condition)
-            if (onMessageConfirmed && response.message) {
+            if (onMessageConfirmed) {
               onMessageConfirmed(item, response.message);
             }
             console.log('[OfflineQueue] Queued message sent');
           } else {
             failureCode = typeof response?.code === 'string' ? response.code : 'REQUEST_FAILED';
+            const detail = response?.error?.message ?? response?.error ?? response?.message;
+            if (typeof detail === 'string' && detail.trim()) failureMessage = detail;
             console.log('[OfflineQueue] Queued message failed');
           }
           resolve();
@@ -182,9 +209,13 @@ export const retryOfflineMessages = async (
       const decision = decideSendRetry(item.attempts, failureCode);
       if (decision.action === 'drop') {
         await recordAttempt(item.tempId, key, (item.attempts ?? 0) + 1, true);
+        await updateQueuedMessage(item.tempId, { error: failureMessage });
+        onMessageStatus?.(item, 'failed', failureMessage);
         continue;
       }
       await recordAttempt(item.tempId, key, decision.attempts);
+      await updateQueuedMessage(item.tempId, { status: 'pending', error: failureMessage });
+      onMessageStatus?.(item, 'queued', failureMessage);
       break;
     }
   }
@@ -195,6 +226,38 @@ export const retryOfflineMessages = async (
   }
 
   return successfulSends;
+};
+
+type RetryObserver = {
+  confirmed?: (queuedMsg: QueuedMessage, serverMessage: any) => void;
+  status?: StatusCallback;
+};
+const activeRetries = new Map<string, { token: string | null; observers: Set<RetryObserver>; promise: Promise<QueuedMessage[]> }>();
+
+/** A manual retry and a reconnect share one send operation per conversation. */
+export const retryOfflineMessages = (
+  socket: Socket,
+  matchId: string,
+  onMessageConfirmed?: RetryObserver['confirmed'],
+  onMessageStatus?: StatusCallback,
+): Promise<QueuedMessage[]> => {
+  const key = queueKey();
+  if (!key || !socket.connected) return Promise.resolve([]);
+  const token = store.getState().auth.token;
+  const retryKey = `${key}:${matchId}`;
+  const observer = { confirmed: onMessageConfirmed, status: onMessageStatus };
+  const current = activeRetries.get(retryKey);
+  if (current && current.token === token) {
+    current.observers.add(observer);
+    return current.promise;
+  }
+  const entry = { token, observers: new Set([observer]), promise: Promise.resolve([] as QueuedMessage[]) };
+  activeRetries.set(retryKey, entry);
+  entry.promise = sendQueuedMessages(socket, matchId,
+    (queued, message) => { for (const listener of entry.observers) listener.confirmed?.(queued, message); },
+    (queued, status, error) => { for (const listener of entry.observers) listener.status?.(queued, status, error); },
+  ).finally(() => { if (activeRetries.get(retryKey) === entry) activeRetries.delete(retryKey); });
+  return entry.promise;
 };
 
 // Listen for connection restore - don't auto-retry here
@@ -209,8 +272,9 @@ export const triggerQueueRetry = async (
   socket: Socket,
   matchId: string,
   onMessageConfirmed?: (queuedMsg: QueuedMessage, serverMessage: any) => void,
+  onMessageStatus?: StatusCallback,
 ) => {
-  const successfulSends = await retryOfflineMessages(socket, matchId, onMessageConfirmed);
+  const successfulSends = await retryOfflineMessages(socket, matchId, onMessageConfirmed, onMessageStatus);
   console.log('[OfflineQueue] Retry complete, sent ' + successfulSends.length + ' messages');
   return successfulSends;
 };
