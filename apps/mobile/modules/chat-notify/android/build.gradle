@@ -1,0 +1,31 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.chatnotify'
+version = '1.0.0'
+
+android {
+  namespace 'expo.modules.chatnotify'
+  defaultConfig { versionCode 1; versionName '1.0.0' }
+}
+
+dependencies {
+  testImplementation 'junit:junit:4.13.2'
+  // ChatMessagingService extends Expo's receiver; other notification types still use Expo.
+  // expo-notifications ships prebuilt (its local Maven repo); the app already includes it, so
+  // compile against it only. Must equal the installed expo-notifications version.
+  compileOnly "host.exp.exponent:expo.modules.notifications:57.0.17"
+  // Must equal expo-notifications' Firebase Messaging.
+  implementation 'com.google.firebase:firebase-messaging:25.0.1'
+  // Must equal expo-audio's and expo-video's androidxMedia3Version: mixed Media3
+  // versions compile but fail at runtime with missing-method errors.
+  def media3Version = "1.9.0"
+  implementation "androidx.media3:media3-exoplayer:${media3Version}"
+  implementation "androidx.media3:media3-session:${media3Version}"
+  implementation "androidx.work:work-runtime:2.10.0"
+  implementation "androidx.core:core-ktx:1.13.1"
+  // The bubble's chat screen is a React Native activity (ChatBubbleActivity); the version comes from the app.
+  implementation 'com.facebook.react:react-android'
+}

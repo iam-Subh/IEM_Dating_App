@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- "Share to <name>" in Android's share sheet (MESSAGE_NOTIFICATIONS_PLAN.md 12): each chat's
+     shortcut carries this category (ChatNotifier.publishShortcut). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+  <share-target android:targetClass="com.iemconnect.app.MainActivity">
+    <data android:mimeType="text/plain" />
+    <data android:mimeType="image/*" />
+    <category android:name="com.iemconnect.app.category.CHAT_SHARE" />
+  </share-target>
+</shortcuts>

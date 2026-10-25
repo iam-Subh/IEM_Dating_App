@@ -1,0 +1,54 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:tools="http://schemas.android.com/tools">
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+  <!-- Raise to ear (section 7): screen off at the ear, sound through the earpiece. -->
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+  <application>
+    <!-- Chat and selfie-result pushes are drawn here. Expo's own receiver is
+         registered at priority -1, so this one (0) gets every push first and
+         hands other notification types to Expo. -->
+    <service
+      android:name="expo.modules.chatnotify.ChatMessagingService"
+      android:exported="false">
+      <intent-filter>
+        <action android:name="com.google.firebase.MESSAGING_EVENT" />
+      </intent-filter>
+    </service>
+    <!-- Voice messages played from the notification (section 7). -->
+    <service
+      android:name="expo.modules.chatnotify.VoicePlaybackService"
+      android:exported="true"
+      android:foregroundServiceType="mediaPlayback">
+      <intent-filter>
+        <action android:name="androidx.media3.session.MediaSessionService" />
+      </intent-filter>
+    </service>
+    <!-- A chat in a bubble (section 12): embedded, resizable, one document per chat. -->
+    <activity
+      android:name="expo.modules.chatnotify.ChatBubbleActivity"
+      android:allowEmbedded="true"
+      android:documentLaunchMode="always"
+      android:resizeableActivity="true"
+      android:exported="false"
+      android:theme="@style/Theme.AppCompat.DayNight.NoActionBar"
+      android:windowSoftInputMode="adjustResize"
+      android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode" />
+    <receiver
+      android:name="expo.modules.chatnotify.ChatActionReceiver"
+      android:exported="false" />
+    <!-- Pictures in notifications: the system UI reads them through this provider (section 6). -->
+    <provider
+      android:name="expo.modules.chatnotify.ChatNotifyFileProvider"
+      android:authorities="${applicationId}.chatnotify.files"
+      android:exported="false"
+      android:grantUriPermissions="true">
+      <meta-data
+        android:name="android.support.FILE_PROVIDER_PATHS"
+        android:resource="@xml/chat_notify_paths" />
+    </provider>
+  </application>
+</manifest>
