@@ -26,6 +26,7 @@ import {
 } from '../../mobile/src/services/queue/sendRetryPolicy';
 import { createTypingPresence } from '../../mobile/src/features/chat/typingPresence';
 import { ChatService } from '../src/services/chat.service';
+import { MessageMarksService } from '../src/services/message-marks.service';
 import { ChatEventService } from '../src/services/chat-event.service';
 import {
   insertMessageOrdered,
@@ -131,6 +132,30 @@ after(async () => {
   await closeSocket();
   await prisma.$disconnect();
   await redisClient.quit().catch(() => undefined);
+});
+
+test('message stars are private, pins are shared, and hidden messages cannot be marked', async () => {
+  const message = await prisma.message.create({ data: { matchId, senderId: accountA, content: 'Mark regression' } });
+  await MessageMarksService.set(accountA, matchId, message.id, 'star', true);
+  assert.equal((await MessageMarksService.get(accountA, matchId, message.id)).starred, true);
+  assert.equal((await MessageMarksService.get(accountB, matchId, message.id)).starred, false);
+  await MessageMarksService.set(accountA, matchId, message.id, 'pin', true);
+  assert.equal((await MessageMarksService.get(accountB, matchId, message.id)).pinned, true);
+  await assert.rejects(MessageMarksService.set(randomUUID(), matchId, message.id, 'pin', false));
+  await prisma.message.update({ where: { id: message.id }, data: { hiddenBy: [accountB] } });
+  await assert.rejects(MessageMarksService.set(accountB, matchId, message.id, 'star', true));
+  assert.equal((await MessageMarksService.list(accountB, matchId, 'pin')).some(item => item.id === message.id), false);
+  await MessageMarksService.set(accountA, matchId, message.id, 'star', false);
+  assert.equal((await MessageMarksService.get(accountA, matchId, message.id)).starred, false);
+});
+
+test('rapid sends accept distinct commands and retries do not duplicate messages', async () => {
+  const commands = [randomUUID(), randomUUID(), randomUUID()];
+  const sent = await Promise.all(commands.map(id => ChatService.sendMessage(accountA, matchId, 'Rapid send', undefined, [], id)));
+  assert.equal(new Set(sent.map(message => message.id)).size, 3);
+  assert.equal(new Set(sent.map(message => message.messageSeq)).size, 3);
+  const retried = await Promise.all(commands.map(id => ChatService.sendMessage(accountA, matchId, 'Rapid send', undefined, [], id)));
+  assert.deepEqual(retried.map(message => message.id), sent.map(message => message.id));
 });
 
 test('an established connection stays authorized after its access token would expire', async () => {

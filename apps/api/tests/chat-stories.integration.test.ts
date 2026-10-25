@@ -104,6 +104,15 @@ test('recovery preserves all supported reaction characters', async () => {
   for (const emoji of ['❤️', '👍', '😂', '😮', '😢', '🔥']) {
     assert.equal((await ChatService.setReaction(matchId, message.id, userB, emoji)).emoji, emoji);
   }
+  const stored = await prisma.messageReaction.findMany({ where: { messageId: message.id, userId: userB } });
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].emoji, '🔥');
+
+  const removed = await ChatService.setReaction(matchId, message.id, userB, null);
+  assert.equal(removed.emoji, null);
+  assert.equal(await prisma.messageReaction.count({ where: { messageId: message.id, userId: userB } }), 0);
+  const replay = await ChatService.getEvents(userA, matchId, 0, 200);
+  assert.ok(replay.events.some((event) => event.type === 'reaction.removed' && event.entityId === message.id));
 });
 
 test('edit rechecks deletion after the initial message lookup', async (context) => {
