@@ -38,6 +38,9 @@ export class DiscoveryRankingService {
         lastActiveAt: true,
         createdAt: true,
         avatarUrl: true,
+        realPersonVerifiedAt: true,
+        realPersonPassedAt: true,
+        studentMembership: { select: { status: true, verifiedAt: true, expiresAt: true } },
       },
     });
     const now = Date.now();
@@ -84,6 +87,10 @@ export class DiscoveryRankingService {
       hasPhoto: !!p.avatarUrl,
       incomingLike: likes.has(p.id),
       reciprocityPoints: likes.has(p.id) ? 0 : (predictions.get(p.id) ?? 0),
+      unverified: !(p.studentMembership?.status === "verified" && p.studentMembership.verifiedAt &&
+        (!p.studentMembership.expiresAt || p.studentMembership.expiresAt.getTime() > now)),
+      realPerson: !!p.realPersonVerifiedAt,
+      photoIssue: !!p.realPersonPassedAt && !p.realPersonVerifiedAt,
     }));
     onMetrics?.({ compatibilityMs: performance.now() - compatibilityStarted, reciprocity, candidates: profiles.length });
     onSnapshot?.(candidates.map((p) => ({ ...p })));

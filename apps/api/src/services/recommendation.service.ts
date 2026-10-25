@@ -1,7 +1,7 @@
 import { DiscoveryTelemetry, PageMetrics, pageMetrics, timed } from "./discovery-telemetry.service";
 import { prisma } from "../utils/prisma";
 import { HttpError } from "../utils/httpError";
-import { setupComplete } from "./eligibility.service";
+import { asViewer, isEligibilityParty, setupComplete } from "./eligibility.service";
 import { AlgorithmConfigService } from "./algorithm-config.service";
 import {
   DeckService,
@@ -20,7 +20,6 @@ import { randomUUID } from "crypto";
 import type { DiscoveryPage } from "@iem-dating/shared";
 import { RankingCandidate } from "./ranking-policy";
 import { ExposureReservationService } from "./exposure-reservation.service";
-import { StudentMembershipService } from "./student-membership.service";
 
 export class RecommendationService {
   static async getRecommendations(
@@ -44,9 +43,11 @@ export class RecommendationService {
   }
   private static async page(userId: string, cursor: string | undefined, limit: number,
     afterResponse: ((work: () => void) => void) | undefined, metrics: PageMetrics): Promise<DiscoveryPage> {
-    const me = await prisma.user.findUnique({ where: { id: userId } });
-    if (!me) throw new HttpError(404, "User not found");
-    if (!setupComplete(me) || !(await StudentMembershipService.hasValidMembership(userId))) {
+    const found = await prisma.user.findUnique({ where: { id: userId } });
+    if (!found) throw new HttpError(404, "User not found");
+    // Browsing as a viewer: while hidden at a place, from the phone's private position.
+    const me = asViewer(found);
+    if (!setupComplete(me) || !(await isEligibilityParty(prisma, userId))) {
       metrics.kind = "setup";
       return {
         cards: [],
@@ -70,7 +71,7 @@ export class RecommendationService {
         config.flags.candidate_budget,
         excluded,
       ));
-      return timed(metrics, "rankingMs", () => DiscoveryRankingService.rank(
+      const ranked = await timed(metrics, "rankingMs", () => DiscoveryRankingService.rank(
         me,
         ids,
         algorithm,
@@ -87,6 +88,9 @@ export class RecommendationService {
           : undefined,
         (value) => metrics.ranking.push(value),
       ));
+      // Inside your own radius, or your own college, before anyone reachable
+      // only through "see further" or a wider college scope (LOCATION_SPEC.md 6.5, 8.4).
+      return RetrievalService.nearFirst(me, await RetrievalService.preferenceFirst(me, ranked));
     };
     const decoded = cursor ? decodeCursor(cursor, userId) : null;
     let deck = await timed(metrics, "deckMs", () => decoded
@@ -126,13 +130,13 @@ export class RecommendationService {
       where: { id: userId },
       select: discoveryProfileSelect,
     });
-    const current = await prisma.user.findUniqueOrThrow({
+    const current = asViewer(await prisma.user.findUniqueOrThrow({
       where: { id: userId },
-    });
+    }));
     if (
       current.eligibilityVersion !== me.eligibilityVersion ||
       !setupComplete(current) ||
-      !(await StudentMembershipService.hasValidMembership(userId))
+      !(await isEligibilityParty(prisma, userId))
     )
       throw new HttpError(409, "Restart discovery", "DECK_EXPIRED");
     const allowed = await RetrievalService.eligibleIds(

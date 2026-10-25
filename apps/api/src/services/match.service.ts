@@ -1,3 +1,5 @@
+import { NotificationFeedService } from './notification-feed.service';
+import { PushService } from './push.service';
 import { SwipeService } from './swipe.service';
 import { prisma } from '../utils/prisma';
 import { redisClient } from '../utils/redis';
@@ -6,6 +8,7 @@ import { logger } from '../utils/logger';
 import { ageAt } from './eligibility.service';
 import { HttpError } from '../utils/httpError';
 import { evictMatchRoom } from '../socket';
+import { ChatService } from './chat.service';
 import { AccountEventService } from './account-event.service';
 
 export class MatchService {
@@ -26,10 +29,16 @@ export class MatchService {
       await AccountEventService.append(tx, {
         userIds: [match.user1Id, match.user2Id], type: 'access.revoked', matchId, payload: { reason: 'unmatched' },
       });
-      return { matchId, repeated: false };
+      return { matchId, repeated: false, users: [match.user1Id, match.user2Id] };
     });
     evictMatchRoom(matchId);
-    return result;
+    // The chat is gone for both: so are its notifications, here and on the phones.
+    if ('users' in result && result.users) {
+      const [a, b] = result.users;
+      void NotificationFeedService.forgetBetween(a, b).catch(() => undefined);
+      for (const id of result.users) void PushService.clear(id, { matchId, end: true }).catch(() => undefined);
+    }
+    return { matchId: result.matchId, repeated: result.repeated };
   }
   /**
    * Get all active matches for a user, with the other user's profile info.
@@ -72,23 +81,15 @@ export class MatchService {
             },
           },
         },
-        messages: {
-          where: { isDeleted: false, NOT: { hiddenBy: { has: userId } } },
-          orderBy: { sentAt: 'desc' },
-          take: 1,
-          select: {
-            content: true,
-            sentAt: true,
-            senderId: true,
-          },
-        },
+
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    return matches.map((match) => {
+    const conversations = new Map((await ChatService.getConversations(userId)).map(row => [row.matchId, row]));
+    return matches.filter(match => conversations.has(match.id)).map((match) => {
       const otherUser = match.user1Id === userId ? match.user2 : match.user1;
-      const lastMsg = match.messages[0] || null;
+      const conversation = conversations.get(match.id)!;
 
       return {
         matchId: match.id,
@@ -99,9 +100,9 @@ export class MatchService {
           department: otherUser.department,
           avatar: otherUser.avatarUrl || otherUser.photos[0]?.photoUrl || null,
         },
-        lastMessage: lastMsg
-          ? { content: lastMsg.content, sentAt: lastMsg.sentAt, senderId: lastMsg.senderId }
-          : null,
+        lastMessage: conversation.lastMessage,
+        unreadCount: conversation.unreadCount,
+        reactionPreview: conversation.reactionPreview,
         matchedAt: match.createdAt,
       };
     });

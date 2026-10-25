@@ -3,6 +3,12 @@ import { createHash } from "crypto";
 export type RankingCandidate = {
   id: string;
   score: number | null;
+  /** No valid college verification: shown after verified people with a similar score (GOOGLE_SIGNUP_PLAN.md 3). */
+  unverified?: boolean;
+  /** Passed the real-person check, and every photo and the video still match (PHOTO_VERIFICATION_PLAN.md). */
+  realPerson?: boolean;
+  /** Passed it once, but a photo or the video now doesn't match: until it's fixed. */
+  photoIssue?: boolean;
   visibleCount: number;
   active: boolean;
   hasPhoto: boolean;
@@ -43,13 +49,23 @@ export function rankCandidates(
   );
   const tie = (a: RankingCandidate, b: RankingCandidate) =>
     hashes.get(a.id)!.localeCompare(hashes.get(b.id)!);
+  // Unverified: a few points down, so a verified person with a similar score
+  // comes first - shown, never hidden.
+  const UNVERIFIED_PENALTY = 6;
+  // The real-person check: a little ahead, as a trust signal - never required.
+  // A photo that isn't them: a little behind, until it's fixed.
+  const REAL_PERSON_BONUS = 3;
+  const PHOTO_ISSUE_PENALTY = 4;
   const adjustment = (p: RankingCandidate) =>
-    policy
+    (p.unverified ? -UNVERIFIED_PENALTY : 0) +
+    (p.realPerson ? REAL_PERSON_BONUS : 0) -
+    (p.photoIssue ? PHOTO_ISSUE_PENALTY : 0) +
+    (policy
       ? (p.active ? 5 : 0) +
         (p.hasPhoto ? 2 : 0) -
         exposurePenalty(p.visibleCount) +
         Math.max(-5, Math.min(5, p.reciprocityPoints ?? 0))
-      : 0;
+      : 0);
   const scores = new Map(
     unique.filter((p): p is RankingCandidate & { score: number } => p.score !== null)
       .map((p) => [p.id, p.score + adjustment(p)]),
@@ -61,12 +77,13 @@ export function rankCandidates(
   const cold = unique
     .filter((p) => p.score === null)
     .sort((a, b) =>
-      policy
+      Number(!!a.unverified) - Number(!!b.unverified) ||
+      (policy
         ? a.visibleCount - b.visibleCount ||
           Number(b.active) - Number(a.active) ||
           Number(b.hasPhoto) - Number(a.hasPhoto) ||
           tie(a, b)
-        : tie(a, b),
+        : tie(a, b)),
     );
   const explore = [...unique].sort(tie);
   const incoming = [...known, ...cold].filter((p) => p.incomingLike);
