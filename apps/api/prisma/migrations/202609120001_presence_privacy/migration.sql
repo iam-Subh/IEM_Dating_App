@@ -1,0 +1,2 @@
+ALTER TABLE "users"
+ADD COLUMN IF NOT EXISTS "show_online_status" BOOLEAN NOT NULL DEFAULT true;
