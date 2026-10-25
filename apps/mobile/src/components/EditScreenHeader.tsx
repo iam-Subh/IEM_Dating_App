@@ -1,15 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Platform,
+  StatusBar,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
-import { colors } from '../core/theme/colors';
-import { DiscardModal } from './DiscardModal';
+import { Ionicons } from '@expo/vector-icons';
+import { useNavigation, usePreventRemove } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { cancelDiscardRequest, createDiscardRequest } from './discardChangesRequests';
+import { editColors } from './ProfileEditDesign';
 
 interface EditScreenHeaderProps {
   title: string;
@@ -18,6 +20,7 @@ interface EditScreenHeaderProps {
   saving?: boolean;
   saveDisabled?: boolean;
   hasUnsavedChanges?: boolean;
+  showSave?: boolean;
 }
 
 export const EditScreenHeader = ({
@@ -26,63 +29,52 @@ export const EditScreenHeader = ({
   onSave,
   saving = false,
   saveDisabled = false,
-  hasUnsavedChanges = false,
+  hasUnsavedChanges,
+  showSave = false,
 }: EditScreenHeaderProps) => {
   const navigation = useNavigation<any>();
-  const [showDiscardModal, setShowDiscardModal] = useState(false);
-  const [pendingAction, setPendingAction] = useState<any>(null);
-
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('beforeRemove', (e: any) => {
-      if (!hasUnsavedChanges || saving) {
-        return;
-      }
-
-      e.preventDefault();
-      setPendingAction(e.data.action);
-      setShowDiscardModal(true);
+  const insets = useSafeAreaInsets();
+  const pendingRequest = useRef<string | null>(null);
+  usePreventRemove(!!hasUnsavedChanges && !saving, ({ data }) => {
+    if (pendingRequest.current) return;
+    const requestId = createDiscardRequest((discard) => {
+      pendingRequest.current = null;
+      if (discard) navigation.dispatch(data.action);
     });
-
-    return unsubscribe;
-  }, [navigation, hasUnsavedChanges, saving]);
-
-  const handleConfirmDiscard = () => {
-    setShowDiscardModal(false);
-    if (pendingAction) {
-      navigation.dispatch(pendingAction);
-    } else {
-      navigation.goBack();
-    }
-  };
+    pendingRequest.current = requestId;
+    navigation.navigate('DiscardChanges', { requestId });
+  });
+  useEffect(() => () => {
+    if (pendingRequest.current) cancelDiscardRequest(pendingRequest.current);
+  }, []);
 
   const handleCancel = () => {
+    if (saving) return;
     onCancel();
   };
+  const disabled = saving || saveDisabled || hasUnsavedChanges === false;
 
   return (
-    <View style={styles.header}>
-      <TouchableOpacity onPress={handleCancel} style={styles.headerBtn} activeOpacity={0.7}>
-        <Text style={styles.cancelText}>Cancel</Text>
+    <View style={[styles.header, { paddingTop: insets.top + 8, paddingBottom: showSave ? 10 : 0 }]}>
+      <StatusBar barStyle="light-content" backgroundColor={editColors.canvas}/>
+      <TouchableOpacity disabled={saving} onPress={handleCancel} style={[styles.headerBtn, styles.cancelButton]} activeOpacity={0.7} hitSlop={3} accessibilityRole="button" accessibilityLabel="Cancel changes">
+        <Ionicons name="arrow-back" size={22} color={editColors.text}/>
       </TouchableOpacity>
       <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
-      <TouchableOpacity
+      {showSave ? <TouchableOpacity
         onPress={onSave}
-        disabled={saving || saveDisabled}
-        style={[styles.headerBtn, (saving || saveDisabled) && { opacity: 0.4 }]}
+        disabled={disabled}
+        style={[styles.headerBtn, styles.saveButton, disabled && { opacity: 0.4 }]}
         activeOpacity={0.7}
+        hitSlop={3}
+        accessibilityRole="button" accessibilityLabel="Save changes" accessibilityState={{ disabled, busy: saving }}
       >
         {saving ? (
-          <ActivityIndicator size="small" color="#F94E27" />
+          <ActivityIndicator size="small" color="#331C23" />
         ) : (
           <Text style={styles.saveText}>Save</Text>
         )}
-      </TouchableOpacity>
-
-      <DiscardModal
-        visible={showDiscardModal}
-        onConfirm={handleConfirmDiscard}
-        onCancel={() => setShowDiscardModal(false)}
-      />
+      </TouchableOpacity> : <View style={{width: 44}}/>}
     </View>
   );
 };
@@ -92,34 +84,35 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: Platform.OS === 'ios' ? 60 : 44,
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    backgroundColor: colors.surface,
+    paddingHorizontal: 24,
+    backgroundColor: editColors.canvas,
   },
   headerBtn: {
-    minWidth: 60,
-    paddingVertical: 6,
-    paddingHorizontal: 4,
+    minWidth: 44,
+    minHeight: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    borderRadius: 22,
   },
+  cancelButton: { width: 44, paddingHorizontal: 0, backgroundColor: editColors.surface },
+  saveButton: { minWidth: 76, backgroundColor: editColors.accent },
   cancelText: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
-    color: colors.text.secondary,
+    color: '#FFFFFF',
   },
   headerTitle: {
     flex: 1,
-    fontSize: 17,
-    fontWeight: '700',
-    color: colors.text.primary,
+    fontSize: 16,
+    lineHeight: 23,
+    fontFamily: 'DMSans_500Medium',
+    color: editColors.text,
     textAlign: 'center',
   },
   saveText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#F94E27',
-    textAlign: 'right',
+    fontSize: 14,
+    fontFamily: 'DMSans_700Bold',
+    color: editColors.onAccent,
   },
 });
