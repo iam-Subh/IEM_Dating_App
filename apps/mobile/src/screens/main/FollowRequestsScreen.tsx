@@ -1,30 +1,74 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api } from '../../services/api';
-import { colors } from '../../core/theme/colors';
+import { SettingsAvatar, SettingsEmptyState, SettingsPage, settingsLayout, settingsPalette as palette } from '../../core/settings/SettingsLayout';
 
-export const FollowRequestsScreen = ({ navigation }: any) => {
-  const [requests, setRequests] = useState<any[]>([]);
-  const load = useCallback(() => api.get('/stories/follow-requests').then((response) => setRequests(response.data.data)), []);
-  useEffect(() => { load(); }, [load]);
+type Request = { id: string; requester?: { name?: string; avatarUrl?: string | null } };
+
+export const FollowRequestsScreen = () => {
+  const insets = useSafeAreaInsets();
+  const [requests, setRequests] = useState<Request[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const [pending, setPending] = useState<{ id: string; accept: boolean } | null>(null);
+  const [errorId, setErrorId] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    setLoading(true); setFailed(false);
+    try { const response = await api.get('/stories/follow-requests'); setRequests(response.data.data ?? []); }
+    catch { setFailed(true); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
   const respond = async (id: string, accept: boolean) => {
-    await api.patch(`/stories/follows/${id}`, { accept });
-    setRequests((items) => items.filter((item) => item.id !== id));
+    if (pending) return;
+    setPending({ id, accept }); setErrorId(null);
+    try {
+      await api.patch(`/stories/follows/${id}`, { accept });
+      setRequests((items) => items.filter((item) => item.id !== id));
+    } catch { setErrorId(id); }
+    finally { setPending(null); }
   };
-  return <View style={styles.container}>
-    <View style={styles.header}><Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={() => navigation.goBack()}><Text style={styles.back}>Back</Text></Pressable><Text style={styles.title}>Follow requests</Text></View>
-    <FlatList accessibilityLabel="Pending follow requests" data={requests} keyExtractor={(item) => item.id} contentContainerStyle={styles.list}
-      ListEmptyComponent={<Text style={styles.empty}>No pending requests.</Text>}
-      renderItem={({ item }) => <View style={styles.item}>
-        <Image accessible={false} source={{ uri: item.requester?.avatarUrl ?? undefined }} style={styles.avatar} />
-        <Text style={styles.name}>{item.requester?.name ?? 'IEM student'}</Text>
-        <Pressable accessibilityRole="button" accessibilityLabel={`Delete follow request from ${item.requester?.name ?? 'this student'}`} onPress={() => respond(item.id, false)} style={styles.secondary}><Text style={styles.secondaryText}>Delete</Text></Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel={`Accept follow request from ${item.requester?.name ?? 'this student'}`} onPress={() => respond(item.id, true)} style={styles.primary}><Text style={styles.primaryText}>Accept</Text></Pressable>
+  return <SettingsPage title="Follow requests">
+    <FlatList accessibilityLabel="Pending follow requests" data={requests} keyExtractor={(item) => item.id} showsVerticalScrollIndicator={false}
+      contentContainerStyle={[settingsLayout.content, { paddingBottom: insets.bottom + 20 }]}
+      ListHeaderComponent={<View style={settingsLayout.listIntro}>
+        <Text style={settingsLayout.intro}>Choose who can follow your stories.</Text>
+        {requests.length > 0 && <Text style={settingsLayout.listHeading}>{requests.length} pending {requests.length === 1 ? 'request' : 'requests'}</Text>}
+        {failed && requests.length > 0 && <Pressable onPress={load}><Text style={styles.error}>Could not refresh. Tap to retry.</Text></Pressable>}
+      </View>}
+      ListEmptyComponent={loading ? <ActivityIndicator color={palette.accent} style={{ marginTop: 24 }} />
+        : <SettingsEmptyState icon={failed ? 'cloud-offline-outline' : 'mail-open-outline'} title={failed ? 'Could not load requests' : 'No pending requests'}
+          message={failed ? 'Check your connection and try again.' : 'New follow requests will appear here.'} onRetry={failed ? load : undefined} />}
+      renderItem={({ item }) => <View style={styles.card}>
+        <View style={styles.identity}>
+          <SettingsAvatar name={item.requester?.name ?? 'IEM student'} uri={item.requester?.avatarUrl} />
+          <View style={styles.copy}><Text style={styles.name}>{item.requester?.name ?? 'IEM student'}</Text><Text style={styles.note}>Wants to follow your stories</Text></View>
+        </View>
+        <View style={styles.actions}>
+          {([false, true] as const).map((accept) => <Pressable key={String(accept)} accessibilityRole="button"
+            accessibilityLabel={`${accept ? 'Accept' : 'Delete'} follow request from ${item.requester?.name ?? 'this student'}`}
+            accessibilityState={{ disabled: pending !== null, busy: pending?.id === item.id && pending.accept === accept }}
+            disabled={pending !== null} onPress={() => void respond(item.id, accept)}
+            style={({ pressed }) => [styles.action, !accept && styles.secondary, pressed && settingsLayout.pressed]}>
+            {pending?.id === item.id && pending.accept === accept ? <ActivityIndicator size="small" color={accept ? palette.accentText : palette.text} />
+              : <Text style={[styles.actionText, !accept && styles.secondaryText]}>{accept ? 'Accept' : 'Delete'}</Text>}
+          </Pressable>)}
+        </View>
+        {errorId === item.id && <Text style={styles.error}>Could not update this request. Try again.</Text>}
       </View>} />
-  </View>;
+  </SettingsPage>;
 };
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background, paddingTop: 58 }, header: { paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', gap: 20 }, back: { color: colors.primary }, title: { color: colors.text.primary, fontSize: 24, fontWeight: '800' }, list: { padding: 20 },
-  item: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 10 }, avatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: colors.surface }, name: { flex: 1, color: colors.text.primary, fontWeight: '600' },
-  primary: { backgroundColor: colors.primary, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12 }, primaryText: { color: '#fff', fontWeight: '700' }, secondary: { paddingHorizontal: 8, paddingVertical: 8 }, secondaryText: { color: colors.text.secondary }, empty: { color: colors.text.secondary, textAlign: 'center', marginTop: 70 },
+  card: { backgroundColor: palette.card, borderRadius: 18, padding: 14, gap: 12 },
+  identity: { flexDirection: 'row', alignItems: 'center', gap: 11 },
+  copy: { flex: 1, minWidth: 0 },
+  name: { color: palette.text, fontFamily: 'DMSans_700Bold', fontSize: 14 },
+  note: { color: palette.secondary, fontFamily: 'DMSans_400Regular', fontSize: 11, lineHeight: 16, marginTop: 3 },
+  actions: { flexDirection: 'row', gap: 8 },
+  action: { flex: 1, minHeight: 44, borderRadius: 22, backgroundColor: palette.accent, alignItems: 'center', justifyContent: 'center' },
+  secondary: { backgroundColor: '#3A3337' },
+  actionText: { color: palette.accentText, fontFamily: 'DMSans_700Bold', fontSize: 13 },
+  secondaryText: { color: palette.text },
+  error: { color: palette.danger, fontFamily: 'DMSans_400Regular', fontSize: 12, lineHeight: 17 },
 });

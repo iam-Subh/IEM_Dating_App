@@ -1,3 +1,6 @@
+import type { RootState } from '../../store';
+import { completeProfileUpload, explicitUploadMessage, precheckPhoto, tellBeingChecked } from '../../features/safety/mediaCheck';
+import { FaceMediaNote, useFaceMediaIssues } from '../../features/verification/RealPerson';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
@@ -6,44 +9,52 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
-  Switch,
   Image,
   Dimensions,
   Modal,
-  PanResponder,
   Animated,
-  Vibration,
   Platform,
-  ScrollView,
+  InteractionManager,
+  BackHandler,
+  StatusBar,
+  type LayoutChangeEvent,
 } from 'react-native';
 
-// Reanimated & Gesture Handler for the 60fps CropModal
-import Reanimated, { useSharedValue, useAnimatedStyle, runOnJS } from 'react-native-reanimated';
-import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
+// Animations and gestures for the media action sheet.
+import Reanimated, { Easing, useSharedValue, useAnimatedStyle, runOnJS, withSpring, withTiming } from 'react-native-reanimated';
+import { GestureDetector, Gesture, GestureHandlerRootView, Pressable as GesturePressable, ScrollView as GestureScrollView } from 'react-native-gesture-handler';
 
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useDispatch } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { api } from '../../services/api';
 import { updateUser } from '../../store/authSlice';
 import { colors } from '../../core/theme/colors';
-import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
+import { EditTapChoice, editColors } from '../../components/ProfileEditDesign';
+import { CAMPUS_ICONS } from '../../core/profile/campusIcons';
+import { ProfileFieldIcon } from '../../components/ProfileFieldIcon';
+import { ABOUT_ME_ICONS } from '../../core/profile/aboutMeIcons';
+import { photoExtFromAsset } from '../../utils/mediaFileExt';
+import { useNavigation, useRoute, useFocusEffect, usePreventRemove, type NavigationAction } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import * as ImageManipulator from 'expo-image-manipulator';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SettingsToggle, settingsPalette as palette } from '../../core/settings/SettingsLayout';
+import { AvatarCropModal } from './profile/AvatarCropModal';
+import { PhotoCropModal } from './profile/PhotoCropModal';
+import { PhotoDiscardDialog } from './profile/PhotoDiscardDialog';
+import { ProfileVideoSection } from './profile/ProfileVideoSection';
+import { PhotoReorderGrid } from './profile/PhotoReorderGrid';
+import type { ProfileEditorSection } from './profile/profileEditNavigation';
+import {studiesSummary} from './edit/studiesModel';
+import {afterScreenTransition} from '../../features/auth/onboarding/afterScreenTransition';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+// Resting offset for the media sheet while closed. Deliberately taller than the
+// sheet can be, and shared with the stylesheet so the very first frame after
+// mount is already off-screen.
+const SHEET_CLOSED_OFFSET = 420;
 const width = SCREEN_WIDTH;
 
-// GRID_GAP and layout constants
-const GRID_GAP = 12;
-const GRID_MARGIN = 16;
-const SLOT_WIDTH = (SCREEN_WIDTH - GRID_MARGIN * 2 - GRID_GAP * 2) / 3;
-const SLOT_HEIGHT = SLOT_WIDTH * 1.5;
-
-const getSlotPosition = (index: number) => ({
-  x: (index % 3) * (SLOT_WIDTH + GRID_GAP),
-  y: Math.floor(index / 3) * (SLOT_HEIGHT + GRID_GAP),
-});
 
 // ─── List Row (Option D) ───────────────────────────────────────────
 const ListRow = ({
@@ -51,7 +62,9 @@ const ListRow = ({
 }: {
   icon: string; label: string; value: string; onPress?: () => void; locked?: boolean; isLast?: boolean; iconFamily?: 'Ionicons' | 'MaterialCommunityIcons';
 }) => (
-  <TouchableOpacity
+  <EditTapChoice
+    accessibilityRole={onPress ? 'button' : 'text'}
+    accessibilityLabel={`${label}, ${value || 'Not added'}${locked ? ', locked' : ''}`}
     style={[styles.listRow, !isLast && styles.listRowBorder]}
     onPress={onPress}
     activeOpacity={onPress ? 0.6 : 1}
@@ -59,68 +72,27 @@ const ListRow = ({
   >
     <View style={styles.listRowIconContainer}>
       {iconFamily === 'Ionicons' ? (
-        <Ionicons name={icon as any} size={22} color="#F94E27" />
+        <ProfileFieldIcon name={icon} size={19} color="#FFB8C7" />
       ) : (
-        <MaterialCommunityIcons name={icon as any} size={22} color="#F94E27" />
+        <MaterialCommunityIcons name={icon as any} size={19} color="#FFB8C7" />
       )}
     </View>
     <View style={styles.listRowContent}>
       <Text style={styles.listRowLabel}>{label}</Text>
-      <Text style={[styles.listRowValue, !value && styles.listRowValueEmpty]} numberOfLines={1}>
+      <Text style={[styles.listRowValue, !value && styles.listRowValueEmpty]} numberOfLines={2}>
         {value || `Add ${label.toLowerCase()}`}
       </Text>
     </View>
     <View style={styles.listRowRight}>
       {locked ? (
-        <Ionicons name="lock-closed" size={16} color="rgba(255,255,255,0.2)" />
+        <Ionicons name="lock-closed-outline" size={15} color={palette.muted} />
       ) : onPress ? (
-        <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
+        <Ionicons name="chevron-forward" size={17} color={palette.muted} />
       ) : null}
     </View>
-  </TouchableOpacity>
+  </EditTapChoice>
 );
 
-const PremiumIconToggle = ({ value, onToggle, saving }: { value: boolean; onToggle: (val: boolean) => void; saving?: boolean }) => {
-  const translateX = useRef(new Animated.Value(value ? 22 : 2)).current;
-
-  useEffect(() => {
-    Animated.spring(translateX, {
-      toValue: value ? 22 : 2,
-      useNativeDriver: true,
-      bounciness: 4,
-      speed: 12,
-    }).start();
-  }, [value]);
-
-  if (saving) return <ActivityIndicator size="small" color="#F94E27" />;
-
-  return (
-    <TouchableOpacity
-      activeOpacity={0.9}
-      onPress={() => onToggle(!value)}
-      style={[
-        styles.toggleTrack,
-        { backgroundColor: value ? 'rgba(249, 78, 39, 0.15)' : 'rgba(255, 255, 255, 0.05)' }
-      ]}
-    >
-      <Animated.View
-        style={[
-          styles.toggleThumb,
-          {
-            transform: [{ translateX }],
-            backgroundColor: value ? '#F94E27' : '#334155',
-          }
-        ]}
-      >
-        <Ionicons
-          name={value ? 'eye' : 'eye-off'}
-          size={11}
-          color={value ? '#FFF' : 'rgba(255, 255, 255, 0.5)'}
-        />
-      </Animated.View>
-    </TouchableOpacity>
-  );
-};
 
 // ─── List Toggle Row ───────────────────────────────────────────────
 const ListToggleRow = ({
@@ -130,19 +102,21 @@ const ListToggleRow = ({
 }) => (
   <View style={[styles.listRow, !isLast && styles.listRowBorder]}>
     <View style={styles.listRowIconContainer}>
-      <Ionicons name={icon as any} size={22} color="#F94E27" />
+      <Ionicons name={icon as any} size={19} color="#FFB8C7" />
     </View>
     <View style={styles.listRowContent}>
       <Text style={[styles.listRowValue, { marginTop: 0 }]}>{label}</Text>
     </View>
-    <PremiumIconToggle value={value} onToggle={onToggle} saving={saving} />
+    <View pointerEvents={saving ? 'none' : 'auto'}>
+      <SettingsToggle label={label} value={value} onChange={onToggle} />
+    </View>
   </View>
 );
 
 // ─── List Section Container ────────────────────────────────────────
-const ListSection = ({ children, title }: { children: React.ReactNode; title: string }) => (
-  <View style={styles.listSectionContainer}>
-    <Text style={styles.sectionLabel}>{title}</Text>
+const ListSection = ({ children, title, onLayout }: { children: React.ReactNode; title: string; onLayout?: (event: LayoutChangeEvent) => void }) => (
+  <View style={styles.listSectionContainer} onLayout={onLayout}>
+    <Text accessibilityRole="header" style={styles.sectionLabel}>{title}</Text>
     <View style={styles.listBlock}>
       {children}
     </View>
@@ -178,25 +152,16 @@ const SuccessModal = ({ visible, onDone }: { visible: boolean; onDone: () => voi
   if (!visible) return null;
 
   return (
-    <Modal transparent visible={visible} animationType="fade">
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onDone}>
       <View style={styles.successModalOverlay}>
         <Animated.View style={[
           styles.successCard,
           { opacity: opacityValue, transform: [{ scale: scaleValue }] }
         ]}>
-          <View style={styles.iconBloomContainer}>
-            <View style={[styles.iconHaloOuter, { backgroundColor: 'rgba(249, 78, 39, 0.08)' }]} />
-            <View style={[styles.iconHaloInner, { backgroundColor: 'rgba(249, 78, 39, 0.15)' }]} />
-            <LinearGradient colors={['#FF8C00', '#F94E27']} style={[styles.successIconCircle, { shadowColor: '#F94E27' }]}>
-              <Ionicons name="checkmark" size={32} color="#fff" />
-            </LinearGradient>
-          </View>
-          <Text style={styles.successTitle}>Profile Updated!</Text>
-          <Text style={styles.successSubtitle}>Your changes are now live and visible to everyone.</Text>
-          <TouchableOpacity style={styles.doneButton} onPress={onDone} activeOpacity={0.8}>
-            <LinearGradient colors={['#FF8C00', '#F94E27']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.doneButtonGradient}>
-              <Text style={styles.doneButtonText}>Awesome</Text>
-            </LinearGradient>
+          <View style={styles.successIconCircle}><Ionicons name="checkmark" size={27} color={palette.accentText} /></View>
+          <Text style={styles.successTitle}>Photos saved</Text>
+          <TouchableOpacity style={styles.doneButton} onPress={onDone} activeOpacity={0.8} accessibilityRole="button">
+            <Text style={styles.doneButtonText}>Done</Text>
           </TouchableOpacity>
         </Animated.View>
       </View>
@@ -204,659 +169,390 @@ const SuccessModal = ({ visible, onDone }: { visible: boolean; onDone: () => voi
   );
 };
 
-// ─── Crop Modal component (60FPS Native Thread) ───────────────────────
-interface CropModalProps {
-  visible: boolean;
-  imageUri: string;
-  onCancel: () => void;
-  onCropSave: (croppedUri: string) => void;
-}
 
-const CropModal = ({ visible, imageUri, onCancel, onCropSave }: CropModalProps) => {
-  const [loading, setLoading] = useState<boolean>(false);
-  const [imageSize, setImageSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
-
-  const cropX = useSharedValue<number>(0);
-  const cropY = useSharedValue<number>(0);
-  const cropSize = useSharedValue<number>(0);
-  
-  const cropRef = useRef({ x: 0, y: 0, size: 0 });
-  const syncCropRef = (x: number, y: number, size: number) => {
-    cropRef.current = { x, y, size };
-  };
-  
-  const MIN_CROP_SIZE = 80;
-  const IMG_PADDING = 16;
-  const maxImgW = SCREEN_WIDTH - IMG_PADDING * 2;
-  const imgRatio = imageSize.height ? imageSize.width / imageSize.height : 1;
-  const renderedW = maxImgW;
-  const renderedH = imageSize.height ? maxImgW / imgRatio : maxImgW;
-
-  useEffect(() => {
-    let isMounted = true;
-    if (visible && imageUri) {
-      Image.getSize(
-        imageUri,
-        (w: number, h: number) => { if (isMounted) setImageSize({ width: w, height: h }); },
-        () => {
-          ImageManipulator.manipulateAsync(imageUri, [])
-            .then(res => { if (isMounted) setImageSize({ width: res.width, height: res.height }); })
-            .catch(() => { if (isMounted) setImageSize({ width: 1000, height: 1000 }); });
-        }
-      );
-    }
-    return () => { isMounted = false; };
-  }, [visible, imageUri]);
-
-  useEffect(() => {
-    if (visible && renderedW > 0 && renderedH > 0) {
-      const initSize = Math.min(renderedW, renderedH) * 0.8;
-      cropSize.value = initSize;
-      cropX.value = (renderedW - initSize) / 2;
-      cropY.value = (renderedH - initSize) / 2;
-      cropRef.current = { x: (renderedW - initSize) / 2, y: (renderedH - initSize) / 2, size: initSize };
-    }
-  }, [visible, imageSize, renderedW, renderedH]);
-
-  const dragGesture = Gesture.Pan()
-    .onChange((event) => {
-      'worklet';
-      let newX = cropX.value + event.changeX;
-      let newY = cropY.value + event.changeY;
-      cropX.value = Math.max(0, Math.min(newX, renderedW - cropSize.value));
-      cropY.value = Math.max(0, Math.min(newY, renderedH - cropSize.value));
-      runOnJS(syncCropRef)(cropX.value, cropY.value, cropSize.value);
-    });
-
-  const resizeGesture = Gesture.Pan()
-    .onChange((event) => {
-      'worklet';
-      const delta = Math.max(event.changeX, event.changeY);
-      let newSize = cropSize.value + delta;
-      newSize = Math.max(MIN_CROP_SIZE, newSize);
-      newSize = Math.min(newSize, renderedW - cropX.value);
-      newSize = Math.min(newSize, renderedH - cropY.value);
-      cropSize.value = newSize;
-      runOnJS(syncCropRef)(cropX.value, cropY.value, cropSize.value);
-    });
-
-  const cropBoxStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: cropX.value }, { translateY: cropY.value }],
-    width: cropSize.value,
-    height: cropSize.value,
-  }));
-
-  const resizeHandleStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateX: cropX.value + cropSize.value - 15 },
-      { translateY: cropY.value + cropSize.value - 15 },
-    ],
-  }));
-
-  const previewStyle = useAnimatedStyle(() => {
-    if (cropSize.value === 0) return { width: 0, height: 0 }; 
-    const previewSize = 120;
-    const previewScale = previewSize / cropSize.value;
-    return {
-      width: renderedW * previewScale,
-      height: renderedH * previewScale,
-      transform: [
-        { translateX: -cropX.value * previewScale },
-        { translateY: -cropY.value * previewScale },
-      ],
-    };
-  });
-
-  const topOverlay = useAnimatedStyle(() => ({ height: cropY.value }));
-  const bottomOverlay = useAnimatedStyle(() => ({ top: cropY.value + cropSize.value }));
-  const leftOverlay = useAnimatedStyle(() => ({ top: cropY.value, width: cropX.value, height: cropSize.value }));
-  const rightOverlay = useAnimatedStyle(() => ({ top: cropY.value, left: cropX.value + cropSize.value, height: cropSize.value }));
-
-  const handleSave = async () => {
-    setLoading(true);
-    try {
-      const normalizedImage = await ImageManipulator.manipulateAsync(
-        imageUri,
-        [], 
-        { compress: 1, format: ImageManipulator.SaveFormat.JPEG }
-      );
-
-      const trueWidth = normalizedImage.width;
-      const trueHeight = normalizedImage.height;
-
-      const scaleX = trueWidth / renderedW;
-      const scaleY = trueHeight / renderedH;
-
-      const { x: cx, y: cy, size: cs } = cropRef.current;
-      
-      let originX = Math.round(cx * scaleX);
-      let originY = Math.round(cy * scaleY);
-      let cropWidth = Math.round(cs * scaleX);
-      let cropHeight = Math.round(cs * scaleY);
-
-      originX = Math.max(0, originX);
-      originY = Math.max(0, originY);
-      if (originX + cropWidth > trueWidth) cropWidth = trueWidth - originX;
-      if (originY + cropHeight > trueHeight) cropHeight = trueHeight - originY;
-
-      if (cropWidth <= 0 || cropHeight <= 0) {
-        onCancel();
-        return;
-      }
-
-      const manipResult = await ImageManipulator.manipulateAsync(
-        normalizedImage.uri,
-        [{ crop: { originX, originY, width: cropWidth, height: cropHeight } }],
-        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
-      );
-
-      onCropSave(manipResult.uri);
-    } catch (e) {
-      console.error("Crop error:", e);
-      Alert.alert("Error", "Could not crop image. Please try another.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (!visible) return null;
-
-  return (
-    <Modal transparent visible={visible} animationType="slide">
-      <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#111' }}>
-        <View style={{ flex: 1, paddingTop: Platform.OS === 'android' ? 40 : 20 }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', padding: 20 }}>
-            <TouchableOpacity onPress={onCancel} style={{ padding: 10, marginLeft: -10 }}>
-              <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={handleSave} disabled={loading} style={{ padding: 10, marginRight: -10 }}>
-              {loading ? <ActivityIndicator color="#fff" /> : <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Save</Text>}
-            </TouchableOpacity>
-          </View>
-
-          <View style={{ flex: 1, alignItems: 'center' }}>
-            <View style={{ width: renderedW, height: renderedH, position: 'relative' }}>
-              <Image source={{ uri: imageUri }} style={{ width: renderedW, height: renderedH }} resizeMode="contain" />
-
-              <Reanimated.View style={[{ position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.55)' }, topOverlay]} pointerEvents="none" />
-              <Reanimated.View style={[{ position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.55)' }, bottomOverlay]} pointerEvents="none" />
-              <Reanimated.View style={[{ position: 'absolute', left: 0, backgroundColor: 'rgba(0,0,0,0.55)' }, leftOverlay]} pointerEvents="none" />
-              <Reanimated.View style={[{ position: 'absolute', right: 0, backgroundColor: 'rgba(0,0,0,0.55)' }, rightOverlay]} pointerEvents="none" />
-
-              <GestureDetector gesture={dragGesture}>
-                <Reanimated.View style={[{ position: 'absolute', borderWidth: 2, borderColor: '#fff' }, cropBoxStyle]}>
-                  <View style={{ position: 'absolute', top: '33.33%', left: 0, right: 0, borderTopWidth: 1, borderColor: 'rgba(255,255,255,0.3)' }} />
-                  <View style={{ position: 'absolute', top: '66.66%', left: 0, right: 0, borderTopWidth: 1, borderColor: 'rgba(255,255,255,0.3)' }} />
-                  <View style={{ position: 'absolute', top: 0, bottom: 0, left: '33.33%', borderLeftWidth: 1, borderColor: 'rgba(255,255,255,0.3)' }} />
-                  <View style={{ position: 'absolute', top: 0, bottom: 0, left: '66.66%', borderLeftWidth: 1, borderColor: 'rgba(255,255,255,0.3)' }} />
-                  <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 999, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.5)' }} pointerEvents="none" />
-                  
-                  <View style={{ position: 'absolute', top: -3, left: -3, width: 20, height: 3, backgroundColor: '#fff' }} pointerEvents="none" />
-                  <View style={{ position: 'absolute', top: -3, left: -3, width: 3, height: 20, backgroundColor: '#fff' }} pointerEvents="none" />
-                  <View style={{ position: 'absolute', top: -3, right: -3, width: 20, height: 3, backgroundColor: '#fff' }} pointerEvents="none" />
-                  <View style={{ position: 'absolute', top: -3, right: -3, width: 3, height: 20, backgroundColor: '#fff' }} pointerEvents="none" />
-                  <View style={{ position: 'absolute', bottom: -3, left: -3, width: 20, height: 3, backgroundColor: '#fff' }} pointerEvents="none" />
-                  <View style={{ position: 'absolute', bottom: -3, left: -3, width: 3, height: 20, backgroundColor: '#fff' }} pointerEvents="none" />
-                </Reanimated.View>
-              </GestureDetector>
-
-              <GestureDetector gesture={resizeGesture}>
-                <Reanimated.View style={[{ position: 'absolute', width: 30, height: 30, zIndex: 10, top: 0, left: 0 }, resizeHandleStyle]}>
-                   <View style={{ position: 'absolute', bottom: 9, right: 9, width: 20, height: 3, backgroundColor: '#fff' }} pointerEvents="none" />
-                   <View style={{ position: 'absolute', bottom: 9, right: 9, width: 3, height: 20, backgroundColor: '#fff' }} pointerEvents="none" />
-                </Reanimated.View>
-              </GestureDetector>
-            </View>
-
-            <View pointerEvents="none" style={{ marginTop: 30, alignItems: 'center' }}>
-              <Text style={{ color: '#fff', fontSize: 13, marginBottom: 12, fontWeight: '700' }}>profile avatar preview</Text>
-              <View style={{ width: 120, height: 120, borderRadius: 60, borderWidth: 1, borderColor: '#444', overflow: 'hidden', backgroundColor: '#222' }}>
-                <Reanimated.Image source={{ uri: imageUri }} style={previewStyle} />
-              </View>
-            </View>
-          </View>
-        </View>
-      </GestureHandlerRootView>
-    </Modal>
-  );
-};
-
-// ─── Media Grid Component ─────────────────────────────────────────────
-interface MediaGridProps {
-  photos: any[];
-  onPhotosChange: (photos: any[]) => void;
-  onAddPress: () => void;
-  onScrollLock: (locked: boolean) => void;
-  onCropProfile: (photoUrl: string) => void;
-}
-
-const MediaGrid = ({ photos, onPhotosChange, onAddPress, onScrollLock, onCropProfile }: MediaGridProps) => {
-  const [displayOrder, setDisplayOrder] = useState<number[]>([0, 1, 2, 3, 4, 5]);
-  const [dragPhotoIdx, setDragPhotoIdx] = useState<number | null>(null);
-
-  const pan = useRef(new Animated.ValueXY()).current;
-  const dragScale = useRef(new Animated.Value(1)).current;
-
-  const cardOffsets = useRef(
-    Array.from({ length: 6 }, () => new Animated.ValueXY({ x: 0, y: 0 }))
-  ).current;
-
-  const stateRef = useRef({
-    isDragging: false,
-    dragPhotoIdx: -1,
-    dragStartSlot: -1,
-    currentHover: -1,
-    displayOrder: [0, 1, 2, 3, 4, 5],
-    dragStartOrder: [0, 1, 2, 3, 4, 5],
-    photos: photos,
-    longPressTimer: null as any,
-    settling: false,
-  });
-
-  useEffect(() => { stateRef.current.photos = photos; }, [photos]);
-
-  const prevPhotosRef = useRef(photos);
-  useEffect(() => {
-    if (prevPhotosRef.current !== photos) {
-      prevPhotosRef.current = photos;
-      const order = [0, 1, 2, 3, 4, 5];
-      stateRef.current.displayOrder = order;
-      stateRef.current.dragStartOrder = order;
-      stateRef.current.settling = false;
-      setDisplayOrder(order);
-      cardOffsets.forEach(o => {
-        o.stopAnimation();
-        o.setValue({ x: 0, y: 0 });
-      });
-    }
-  }, [photos, cardOffsets]);
-
-  const removePhoto = useCallback((photoIndex: number) => {
-    const s = stateRef.current;
-    Alert.alert("Remove Photo", "Are you sure you want to remove this photo?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Remove",
-        style: "destructive",
-        onPress: () => {
-          const reordered = s.displayOrder.map(idx => photos[idx]).filter(Boolean);
-          const visualIdx = s.displayOrder.indexOf(photoIndex);
-          reordered.splice(visualIdx, 1);
-          onPhotosChange(reordered);
-        }
-      }
-    ]);
-  }, [photos, onPhotosChange]);
-
-  const getSlotFromTouch = useCallback((x: number, y: number): number => {
-    const col = Math.max(0, Math.min(2, Math.floor(x / (SLOT_WIDTH + GRID_GAP))));
-    const row = Math.max(0, Math.min(1, Math.floor(y / (SLOT_HEIGHT + GRID_GAP))));
-    return row * 3 + col;
-  }, []);
-
-  const gridRef = useRef<View>(null);
-  const gridLayout = useRef({ x: 0, y: 0, width: 0, height: 0 });
-
-  const onGridLayout = useCallback(() => {
-    gridRef.current?.measureInWindow((x, y, width, height) => {
-      gridLayout.current = { x, y, width, height };
-    });
-  }, []);
-
-  const animateCardsToOrder = useCallback((newOrder: number[], draggedPhotoIdx: number) => {
-    newOrder.forEach((photoIdx, slotIdx) => {
-      if (photoIdx === draggedPhotoIdx) return;
-      if (photoIdx >= stateRef.current.photos.length) return;
-
-      const naturalPos = getSlotPosition(photoIdx);
-      const targetPos = getSlotPosition(slotIdx);
-
-      Animated.spring(cardOffsets[photoIdx], {
-        toValue: { x: targetPos.x - naturalPos.x, y: targetPos.y - naturalPos.y },
-        useNativeDriver: true,
-        friction: 8,
-        tension: 120,
-      }).start();
-    });
-  }, [cardOffsets]);
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, gs) =>
-        stateRef.current.isDragging && (Math.abs(gs.dx) > 2 || Math.abs(gs.dy) > 2),
-      onPanResponderTerminationRequest: () => !stateRef.current.isDragging,
-      onShouldBlockNativeResponder: () => true,
-
-      onPanResponderGrant: (evt) => {
-        const s = stateRef.current;
-        if (s.settling) return; 
-
-        const touchX = evt.nativeEvent.pageX - gridLayout.current.x;
-        const touchY = evt.nativeEvent.pageY - gridLayout.current.y;
-        const touchedSlot = getSlotFromTouch(touchX, touchY);
-
-        const photoAtSlot = s.displayOrder[touchedSlot];
-        if (photoAtSlot === undefined || photoAtSlot >= s.photos.length) return;
-
-        s.isDragging = false;
-        s.dragPhotoIdx = photoAtSlot;
-        s.dragStartSlot = touchedSlot;
-        s.currentHover = touchedSlot;
-        s.dragStartOrder = [...s.displayOrder];
-
-        s.longPressTimer = setTimeout(() => {
-          s.isDragging = true;
-          setDragPhotoIdx(photoAtSlot);
-          Vibration.vibrate(30);
-          onScrollLock(true);
-          Animated.spring(dragScale, {
-            toValue: 1.08,
-            useNativeDriver: true,
-          }).start();
-        }, 200);
-      },
-
-      onPanResponderMove: (_, gs) => {
-        const s = stateRef.current;
-        if (!s.isDragging) return;
-
-        pan.setValue({ x: gs.dx, y: gs.dy });
-
-        const startSlot = s.dragStartSlot;
-        const startPos = getSlotPosition(startSlot);
-        const hoverX = startPos.x + gs.dx + SLOT_WIDTH / 2;
-        const hoverY = startPos.y + gs.dy + SLOT_HEIGHT / 2;
-        const hoverSlot = getSlotFromTouch(hoverX, hoverY);
-
-        if (hoverSlot !== s.currentHover && hoverSlot < s.photos.length) {
-          s.currentHover = hoverSlot;
-          Vibration.vibrate(15);
-
-          const newOrder = [...s.dragStartOrder];
-          const draggedPhotoIdx = s.dragPhotoIdx;
-          const currentIdx = newOrder.indexOf(draggedPhotoIdx);
-          newOrder.splice(currentIdx, 1);
-          newOrder.splice(hoverSlot, 0, draggedPhotoIdx);
-
-          s.displayOrder = newOrder;
-          setDisplayOrder([...newOrder]);
-          animateCardsToOrder(newOrder, draggedPhotoIdx);
-        }
-      },
-
-      onPanResponderRelease: (_, gs) => {
-        const s = stateRef.current;
-        clearTimeout(s.longPressTimer);
-
-        if (s.isDragging) {
-          const draggedPhotoIdx = s.dragPhotoIdx;
-          const finalSlotIdx = s.displayOrder.indexOf(draggedPhotoIdx);
-          const naturalPos = getSlotPosition(draggedPhotoIdx);
-          const targetPos = getSlotPosition(finalSlotIdx);
-
-          cardOffsets[draggedPhotoIdx].setValue({ x: gs.dx, y: gs.dy });
-          pan.setValue({ x: 0, y: 0 });
-
-          s.isDragging = false;
-          s.dragPhotoIdx = -1;
-          s.currentHover = -1;
-          s.settling = true;
-          setDragPhotoIdx(null);
-          onScrollLock(false);
-          Animated.spring(dragScale, { toValue: 1, useNativeDriver: true }).start();
-
-          Animated.spring(cardOffsets[draggedPhotoIdx], {
-            toValue: { x: targetPos.x - naturalPos.x, y: targetPos.y - naturalPos.y },
-            useNativeDriver: true,
-            friction: 8,
-            tension: 100,
-          }).start(() => {
-            s.settling = false;
-            const reorderedPhotos = s.displayOrder
-              .map(idx => s.photos[idx])
-              .filter(Boolean);
-            onPhotosChange(reorderedPhotos);
-          });
-        } else {
-          s.isDragging = false;
-          s.dragPhotoIdx = -1;
-          s.currentHover = -1;
-          setDragPhotoIdx(null);
-          pan.setValue({ x: 0, y: 0 });
-          onScrollLock(false);
-        }
-      },
-
-      onPanResponderTerminate: () => {
-        const s = stateRef.current;
-        clearTimeout(s.longPressTimer);
-        s.isDragging = false;
-        s.dragPhotoIdx = -1;
-        s.currentHover = -1;
-        s.settling = false;
-        s.displayOrder = [...s.dragStartOrder];
-        setDisplayOrder([...s.dragStartOrder]);
-        setDragPhotoIdx(null);
-        cardOffsets.forEach(o => {
-          o.stopAnimation();
-          o.setValue({ x: 0, y: 0 });
-        });
-        pan.setValue({ x: 0, y: 0 });
-        onScrollLock(false);
-        Animated.spring(dragScale, { toValue: 1, useNativeDriver: true }).start();
-      },
-    })
-  ).current;
-
-  return (
-    <View ref={gridRef} style={styles.mediaGrid} onLayout={onGridLayout} {...panResponder.panHandlers}>
-      {Array.from({ length: 6 }).map((_, photoIdx) => {
-        const photo = photos[photoIdx];
-        const imageUrl = photo ? (photo.photoUrl || photo.uri) : null;
-        const slotIdx = displayOrder.indexOf(photoIdx);
-        const isDraggedCard = dragPhotoIdx === photoIdx;
-        const basePos = getSlotPosition(photoIdx);
-
-        if (!imageUrl) {
-          const emptyPos = getSlotPosition(slotIdx);
-          return (
-            <View key={`photo-${photoIdx}`} style={[styles.mediaSlot, { left: emptyPos.x, top: emptyPos.y }]}>
-              <TouchableOpacity style={styles.addMediaButton} onPress={onAddPress}>
-                <Ionicons name="add" size={32} color={colors.text.tertiary} />
-              </TouchableOpacity>
-            </View>
-          );
-        }
-
-        if (isDraggedCard) {
-          return (
-            <Animated.View
-              key={`photo-${photoIdx}`}
-              style={[
-                styles.mediaSlot,
-                {
-                  left: basePos.x,
-                  top: basePos.y,
-                  transform: [
-                    { translateX: Animated.add(cardOffsets[photoIdx].x, pan.x) },
-                    { translateY: Animated.add(cardOffsets[photoIdx].y, pan.y) },
-                    { scale: dragScale },
-                  ],
-                  zIndex: 100,
-                  elevation: 100,
-                },
-              ]}
-            >
-              <Image source={{ uri: imageUrl }} style={styles.mediaImage} />
-              {slotIdx === 0 && (
-                <View style={styles.profileBadge}>
-                  <Ionicons name="star" size={10} color="#fff" />
-                  <Text style={styles.profileBadgeText}>Profile</Text>
-                </View>
-              )}
-              <View style={styles.slotNumber}>
-                <Text style={styles.slotNumberText}>{slotIdx + 1}</Text>
-              </View>
-            </Animated.View>
-          );
-        }
-
-        return (
-          <Animated.View
-            key={`photo-${photoIdx}`}
-            style={[
-              styles.mediaSlot,
-              {
-                left: basePos.x,
-                top: basePos.y,
-                transform: [
-                  { translateX: cardOffsets[photoIdx].x },
-                  { translateY: cardOffsets[photoIdx].y },
-                ],
-              },
-              dragPhotoIdx !== null && { opacity: 0.85 },
-            ]}
-          >
-            <Image source={{ uri: imageUrl }} style={styles.mediaImage} />
-            {slotIdx === 0 && (
-              <View style={styles.profileBadge}>
-                <Ionicons name="star" size={10} color="#fff" />
-                <Text style={styles.profileBadgeText}>Profile</Text>
-              </View>
-            )}
-            {slotIdx === 0 && dragPhotoIdx === null && (
-              <TouchableOpacity style={styles.cropMediaButton} onPress={() => onCropProfile(imageUrl)}>
-                <Ionicons name="crop" size={16} color="#fff" />
-              </TouchableOpacity>
-            )}
-            <View style={styles.slotNumber}>
-              <Text style={styles.slotNumberText}>{slotIdx + 1}</Text>
-            </View>
-            {dragPhotoIdx === null && (
-              <TouchableOpacity style={styles.removeMediaButton} onPress={() => removePhoto(photoIdx)}>
-                <Ionicons name="close" size={16} color="#fff" />
-              </TouchableOpacity>
-            )}
-          </Animated.View>
-        );
-      })}
-    </View>
-  );
-};
 
 // ─── Main Screen ──────────────────────────────────────────────────────
 export const EditProfileScreen = () => {
+  const insets = useSafeAreaInsets();
   const dispatch = useDispatch();
   const navigation = useNavigation<any>();
   const route = useRoute();
-  const { profile: initialProfile } = route.params as { profile: any };
+  // Opened without a profile (the real-person check's "Fix" / "Edit my photos"):
+  // start from the saved one; the refresh below brings the latest.
+  const savedUser = useSelector((state: RootState) => state.auth.user);
+  const { profile: passedProfile, section: entrySection } = (route.params ?? {}) as { profile?: any; section?: ProfileEditorSection };
+  const initialProfile = passedProfile ?? savedUser ?? {};
 
   const [profile, setProfile] = useState<any>(initialProfile);
-  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [successVisible, setSuccessVisible] = useState(false);
-  const [toggleSaving, setToggleSaving] = useState<string | null>(null);
+  const [toggleSaving, setToggleSaving] = useState<Set<string>>(() => new Set());
+  const toggleRequests = useRef(new Set<string>());
+  const photoDraft = useRef(false);
+  const replacementPhoto = useRef<any | null>(null);
+  const pendingExit = useRef<NavigationAction | null>(null);
+  const [discardVisible, setDiscardVisible] = useState(false);
 
   const [mediaActionVisible, setMediaActionVisible] = useState(false);
+
+  // Distance the sheet travels to sit fully off-screen. Seeded with a value
+  // taller than the sheet can be, then replaced by the real measurement on
+  // first layout so the resting position never depends on a guess.
+  // Reanimated shared values, matching CropModal above. The previous version
+  // combined `useNativeDriver: true` animations with `setValue()` from a JS
+  // PanResponder on the same Animated.Value: the node lives on the native side
+  // once a native-driven animation touches it, so the per-frame JS writes did
+  // not track the finger and the opening animation stuttered against them.
+  // A shared value is written and read entirely on the UI thread, so the drag
+  // and the spring drive the same value without crossing threads.
+  const sheetY = useSharedValue(SHEET_CLOSED_OFFSET);
+  const sheetH = useSharedValue(SHEET_CLOSED_OFFSET);
+  const sheetClosing = useSharedValue(false);
+  // Guard the post-mount animation against duplicate development effects.
+  const sheetOpenStartedRef = useRef(false);
+  const sheetClosingRef = useRef(false);
+
+  // Work deferred until the sheet has finished closing. Launching an image
+  // picker while the modal is still tearing down loses the result on Android,
+  // so the picker waits for the dismissal instead of racing it.
+  const afterCloseRef = useRef<null | (() => void)>(null);
+
+  const sheetStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: sheetY.value }],
+  }));
+
+  const backdropStyle = useAnimatedStyle(() => ({
+    opacity: Math.max(0, Math.min(1, 1 - sheetY.value / sheetH.value)),
+  }));
+
+  const closeMediaAction = useCallback((next?: unknown) => {
+    // A second press or backdrop event must not replace the selected action.
+    if (sheetClosingRef.current) return;
+    sheetClosingRef.current = true;
+    sheetClosing.value = true;
+    // Also used directly as an onPress handler, which would pass the press
+    // event in as `next`.
+    afterCloseRef.current = typeof next === 'function' ? (next as () => void) : null;
+    if (!afterCloseRef.current) replacementPhoto.current = null;
+    sheetY.value = withTiming(sheetH.value, { duration: 220 }, (finished) => {
+      'worklet';
+      if (finished) runOnJS(setMediaActionVisible)(false);
+    });
+  }, [sheetY, sheetH, sheetClosing]);
+
+  // Keep this sheet in the screen's native window. Creating a separate Modal
+  // window delayed the first frame on Android and could display an intermediate
+  // sheet position while that window attached.
+  useEffect(() => {
+    if (!mediaActionVisible || sheetOpenStartedRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      if (sheetClosingRef.current) return;
+      sheetOpenStartedRef.current = true;
+      sheetY.value = withTiming(0, {
+        duration: 180,
+        easing: Easing.out(Easing.cubic),
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [mediaActionVisible, sheetY]);
+
+  useEffect(() => {
+    if (!mediaActionVisible) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      closeMediaAction();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [mediaActionVisible, closeMediaAction]);
+
+  useEffect(() => {
+    if (mediaActionVisible) return;
+    const next = afterCloseRef.current;
+    if (!next) return;
+    afterCloseRef.current = null;
+    const task = InteractionManager.runAfterInteractions(next);
+    return () => task.cancel();
+  }, [mediaActionVisible]);
+
+  // overshootClamping matters here: the sheet is anchored to the bottom edge, so
+  // any overshoot past 0 lifts it clear of the edge and flashes a strip of
+  // backdrop underneath it. Clamping settles it exactly on the anchor.
+  const SHEET_SPRING = { damping: 18, stiffness: 190, mass: 0.7, overshootClamping: true };
+
+  // `changeY` is relative to the previous frame, so the sheet keeps following
+  // the finger even when the grab happens mid-animation - no need to stop a
+  // running animation first.
+  const sheetPanGesture = Gesture.Pan()
+    .onChange((e) => {
+      'worklet';
+      if (sheetClosing.value) return;
+      const next = sheetY.value + e.changeY;
+      // Downwards tracks the finger exactly; upwards gets rubber-band damping
+      // so the sheet cannot be dragged above its resting position.
+      sheetY.value = next > 0 ? next : Math.max(next * 0.25, -50);
+    })
+    .onEnd((e) => {
+      'worklet';
+      if (sheetClosing.value) return;
+      if (sheetY.value > 80 || e.velocityY > 600) {
+        runOnJS(closeMediaAction)();
+      } else {
+        sheetY.value = withSpring(0, SHEET_SPRING);
+      }
+    });
+
   const [currentPhotos, setCurrentPhotos] = useState<any[]>(initialProfile.photos || []);
+  const faceIssues = useFaceMediaIssues();
+  // A photo is uploaded and checked for nudity the moment it is picked
+  // (docs/NUDITY_CHECK.md), so the answer comes before Save. By local address:
+  // the tile's state, the running check, and the uploaded file Save reuses.
+  const [photoChecks, setPhotoChecks] = useState<Record<string, 'checking' | 'unsure'>>({});
+  const checkTasks = useRef(new Map<string, Promise<void>>());
+  const checkedUploads = useRef(new Map<string, { fileUrl: string; review: boolean }>());
+  const checkingPhotos = Object.values(photoChecks).includes('checking');
+  const tileIssues = React.useMemo(() => ({ ...faceIssues, ...photoChecks }), [faceIssues, photoChecks]);
+  const setPhotoCheck = (uri: string, state: 'checking' | 'unsure' | null) => setPhotoChecks((prev) => {
+    const next = { ...prev };
+    if (state) next[uri] = state; else delete next[uri];
+    return next;
+  });
+  const precheck = (photo: { uri: string; mimeType?: string | null }, replaced: any | null) => {
+    setPhotoCheck(photo.uri, 'checking');
+    const task = precheckPhoto(photo.uri, photo.mimeType).then((result) => {
+      checkedUploads.current.set(photo.uri, result);
+      setPhotoCheck(photo.uri, result.review ? 'unsure' : null);
+      if (result.review) tellBeingChecked('photo');
+    }).catch((err: any) => {
+      setPhotoCheck(photo.uri, null);
+      const refused = explicitUploadMessage(err);
+      // Anything else (no connection): Save uploads it the usual way.
+      if (!refused) return;
+      // Off the grid at once; a photo it replaced comes back.
+      setCurrentPhotos((prev) => replaced
+        ? prev.map((item) => item.uri === photo.uri ? replaced : item)
+        : prev.filter((item) => item.uri !== photo.uri));
+      Alert.alert("This photo can't be used", refused);
+    }).finally(() => { checkTasks.current.delete(photo.uri); });
+    checkTasks.current.set(photo.uri, task);
+  };
   const [scrollEnabled, setScrollEnabled] = useState(true);
+  const photoScrollRef = useRef<GestureScrollView>(null);
+  const sectionOffsets = useRef<Partial<Record<ProfileEditorSection, number>>>({});
+  const scrollContentReady = useRef(false);
+  const scrollViewportReady = useRef(false);
+  const sectionEntry = useRef<{ section?: ProfileEditorSection; handled: boolean }>({ section: entrySection, handled: false });
+  const scrollToEntrySection = useCallback(() => {
+    if (sectionEntry.current.section !== entrySection) sectionEntry.current = { section: entrySection, handled: false };
+    const offset = entrySection ? sectionOffsets.current[entrySection] : undefined;
+    if (!entrySection || sectionEntry.current.handled || !navigation.isFocused() ||
+        !scrollContentReady.current || !scrollViewportReady.current || offset === undefined || !photoScrollRef.current) return;
+    photoScrollRef.current.scrollTo({ y: Math.max(0, offset - 8), animated: false });
+    sectionEntry.current.handled = true;
+  }, [entrySection, navigation]);
+  const measureSection = useCallback((section: ProfileEditorSection, event: LayoutChangeEvent) => {
+    sectionOffsets.current[section] = event.nativeEvent.layout.y;
+    scrollToEntrySection();
+  }, [scrollToEntrySection]);
+  // A preloaded editor already has its measurements. A new editor waits for layout.
+  useFocusEffect(useCallback(() => { scrollToEntrySection(); }, [scrollToEntrySection]));
+  useFocusEffect(useCallback(() => {
+    if (Platform.OS === 'web') return;
+    return afterScreenTransition(navigation, () => {
+      navigation.preload('EditBirthday', {currentBirthday: profile.birthday});
+      navigation.preload('EditInterests', {currentInterests: profile.preferences?.interests});
+    });
+  }, [navigation, profile.birthday, profile.preferences?.interests]));
   
   const [cropModalVisible, setCropModalVisible] = useState(false);
   const [photoToCrop, setPhotoToCrop] = useState<string | null>(null);
+  const [newPhotoToCrop, setNewPhotoToCrop] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(initialProfile.avatarUrl || null);
   const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
+  // Photos and a video the nudity check sent to the team: not on the profile yet.
+  const [pendingMedia, setPendingMedia] = useState<{ id: string; kind: string; mediaUrl: string | null }[]>(initialProfile.pendingMedia ?? []);
 
-  // Refetch profile when screen gains focus (after editing a sub-screen)
+  const withdrawPending = (id: string) => {
+    Alert.alert('Remove this?', "It won't be added to your profile.", [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove', style: 'destructive', onPress: async () => {
+          try {
+            await api.delete(`/profile/pending-media/${id}`);
+            setPendingMedia((items) => items.filter((item) => item.id !== id));
+          } catch (err: any) {
+            Alert.alert("Couldn't remove it", err?.response?.data?.message ?? 'Check your connection and try again.');
+          }
+        },
+      },
+    ]);
+  };
+
+  // Refetch profile when screen gains focus (after editing a sub-screen).
+  //
+  // Deliberately deferred until the navigation transition has finished. Focus
+  // fires as the push *starts*, so the response used to land while the screen
+  // was still sliding in, and applying it re-renders this whole tree - the grid
+  // with its six animated slots plus every list section. That commit blocks the
+  // UI thread, which is what made the last frames of the slide stutter.
   useFocusEffect(
     useCallback(() => {
-      const fetchProfile = async () => {
+      let cancelled = false;
+
+      const task = InteractionManager.runAfterInteractions(async () => {
         try {
           const response = await api.get('/profile');
+          // The screen can be left before the request settles.
+          if (cancelled) return;
           if (response.data?.success && response.data.data) {
             const freshProfile = response.data.data;
-            setProfile(freshProfile);
-            setCurrentPhotos(freshProfile.photos || []);
-            setAvatarUrl(freshProfile.avatarUrl || null);
+            // Bail out when the server returns what is already on screen, which
+            // is the common case on entry. Returning the previous reference from
+            // an updater makes React skip the re-render entirely; committing an
+            // identical copy instead cost ~220ms of display-list recording and
+            // showed up as a hitch just after the screen settled.
+            const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+            setProfile((prev: any) => {
+              const next = { ...freshProfile };
+              for (const field of toggleRequests.current) next[field] = prev[field];
+              return same(prev, next) ? prev : next;
+            });
+            setCurrentPhotos((prev) => {
+              if (photoDraft.current) return prev;
+              const next = freshProfile.photos || [];
+              return same(prev, next) ? prev : next;
+            });
+            setAvatarUrl((prev) => {
+              const next = freshProfile.avatarUrl || null;
+              return prev === next ? prev : next;
+            });
+            setPendingMedia((prev) => {
+              const next = freshProfile.pendingMedia ?? [];
+              return same(prev, next) ? prev : next;
+            });
           }
         } catch (err) {
-          console.error('[EditProfile] Error refetching profile:', err);
+          // A background refresh: the profile on screen stays, so a warning, not an error screen.
+          if (!cancelled) console.warn('[EditProfile] Could not refresh the profile:', (err as Error)?.message ?? err);
         }
+      });
+
+      return () => {
+        cancelled = true;
+        task.cancel();
       };
-      fetchProfile();
     }, [])
   );
 
   const handleToggle = async (field: string, value: boolean) => {
-    setToggleSaving(field);
+    if (toggleRequests.current.has(field)) return;
+    const previous = profile[field] ?? true;
+    toggleRequests.current.add(field);
+    setToggleSaving(new Set(toggleRequests.current));
+    setProfile((prev: any) => ({ ...prev, [field]: value }));
     try {
       const response = await api.put('/profile', { [field]: value });
       if (response.data?.success) {
-        dispatch(updateUser(response.data.data));
-        setProfile((prev: any) => ({ ...prev, [field]: value }));
+        dispatch(updateUser({ [field]: value }));
+      } else {
+        throw new Error('Could not update visibility');
       }
     } catch (err: any) {
+      setProfile((prev: any) => ({ ...prev, [field]: previous }));
       Alert.alert('Error', err.response?.data?.message || 'Failed to update');
     } finally {
-      setToggleSaving(null);
+      toggleRequests.current.delete(field);
+      setToggleSaving(new Set(toggleRequests.current));
     }
   };
 
-  const handleAddMediaPress = () => {
-    if (currentPhotos.length >= 6) {
+  // Stable callbacks keep the photo grid separate from unrelated screen updates.
+  const handleScrollLock = useCallback((locked: boolean) => setScrollEnabled(!locked), []);
+  const handleCropProfile = useCallback((url: string) => {
+    setPhotoToCrop(url);
+    setCropModalVisible(true);
+  }, []);
+
+  const openPhotoChooser = useCallback((replacing?: any) => {
+    if (mediaActionVisible) return;
+    if (!replacing && currentPhotos.length >= 6) {
       Alert.alert('Limit Reached', 'You can only upload up to 6 photos.');
       return;
     }
+    replacementPhoto.current = replacing ?? null;
+    afterCloseRef.current = null;
+    sheetClosingRef.current = false;
+    sheetClosing.value = false;
+    sheetOpenStartedRef.current = false;
+    // Mount the overlay at its closed position. Its effect starts the opening
+    // animation on the frame after React commits the view.
+    sheetY.value = sheetH.value;
     setMediaActionVisible(true);
-  };
+  }, [currentPhotos.length, mediaActionVisible, sheetY, sheetH, sheetClosing]);
+  const handleAddMediaPress = useCallback(() => openPhotoChooser(), [openPhotoChooser]);
+  const handleReplacePhoto = useCallback((photo: any) => openPhotoChooser(photo), [openPhotoChooser]);
 
-  const handleTakePhoto = async () => {
-    setMediaActionVisible(false);
+  const handleTakePhoto = () => closeMediaAction(takePhoto);
+  const handlePickImage = () => closeMediaAction(pickImage);
+
+  const takePhoto = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
+      replacementPhoto.current = null;
       Alert.alert('Permission needed', 'Camera permission is required to take photos.');
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [2, 3],
-      quality: 0.8,
+      allowsEditing: false,
+      quality: 1,
     });
     if (!result.canceled && result.assets && result.assets.length > 0) {
-      setCurrentPhotos(prev => [...prev, result.assets[0]]);
-    }
+      setNewPhotoToCrop(result.assets[0]);
+    } else replacementPhoto.current = null;
   };
 
-  const handlePickImage = async () => {
-    setMediaActionVisible(false);
+  const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
+      replacementPhoto.current = null;
       Alert.alert('Permission needed', 'Gallery permission is required to choose photos.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [2, 3],
-      quality: 0.8,
+      allowsEditing: false,
+      quality: 1,
     });
     if (!result.canceled && result.assets && result.assets.length > 0) {
-      setCurrentPhotos(prev => [...prev, result.assets[0]]);
-    }
+      setNewPhotoToCrop(result.assets[0]);
+    } else replacementPhoto.current = null;
   };
 
   const handleSavePhotos = async () => {
+    if (!currentPhotos.some(photo => photo.photoUrl || photo.uri)) {
+      Alert.alert('Add a profile photo', 'Your profile needs at least one photo. Add a photo before saving.');
+      return;
+    }
     setSaving(true);
+    let heldPhotos = 0;
     try {
+      // Checks still running finish first; a refused photo leaves the grid.
+      if (checkTasks.current.size) {
+        await Promise.all(checkTasks.current.values());
+        setSaving(false);
+        return;
+      }
       const photoUrls: string[] = [];
       const newPhotoPayloads: { id: string, type: 'photo', ext: string, uri: string }[] = [];
 
       currentPhotos.forEach((photo, i) => {
         if (photo.photoUrl) {
           photoUrls[i] = photo.photoUrl;
+        } else if (photo.uri && checkedUploads.current.has(photo.uri)) {
+          // Uploaded and checked when it was picked.
+          photoUrls[i] = checkedUploads.current.get(photo.uri)!.fileUrl;
         } else if (photo.uri) {
-          const ext = photo.uri.split('.').pop()?.toLowerCase() || 'jpeg';
+          const ext = photoExtFromAsset(photo.uri, photo.mimeType);
           const id = `new_${i}`;
           newPhotoPayloads.push({ id, type: 'photo', ext, uri: photo.uri });
           photoUrls[i] = `UPLOAD_PENDING_${id}`;
@@ -880,7 +576,7 @@ export const EditProfileScreen = () => {
             headers: { 'Content-Type': ticket.contentType }
           });
           if (!uploadResponse.ok) throw new Error('Photo upload failed');
-          await api.post(`/upload/${ticket.assetId}/complete`);
+          if ((await completeProfileUpload(ticket.assetId)).review) heldPhotos += 1;
 
           const placeholder = `UPLOAD_PENDING_${file.id}`;
           const finalIdx = photoUrls.indexOf(placeholder);
@@ -892,16 +588,25 @@ export const EditProfileScreen = () => {
         name: profile.name,
         photos: photoUrls.filter(url => url && !url.startsWith('UPLOAD_PENDING_')),
       };
+      if (!data.photos.length) throw new Error('Your profile needs at least one photo. Add a photo before saving.');
 
       const response = await api.put('/profile', data);
       
       if (response.data?.success) {
         dispatch(updateUser(response.data.data));
-        setSuccessVisible(true);
+        setProfile(response.data.data);
+        setCurrentPhotos(response.data.data.photos || []);
+        setAvatarUrl(response.data.data.avatarUrl || null);
+        setPendingMedia(response.data.data.pendingMedia ?? []);
+        checkedUploads.current.clear();
+        setPhotoChecks({});
+        if (heldPhotos) tellBeingChecked('photo', heldPhotos);
+        else setSuccessVisible(true);
       }
     } catch (err: any) {
-      console.error('[EditProfile] Error Saving:', err);
-      Alert.alert('Error', err.response?.data?.message || 'Failed to update profile');
+      if (!explicitUploadMessage(err)) console.error('[EditProfile] Error Saving:', err);
+      // The real-person check refuses a main photo that isn't them (PHOTO_VERIFICATION_PLAN.md 5).
+      Alert.alert(err.response?.data?.code === 'MAIN_PHOTO_NOT_YOU' ? 'Use a photo of yourself' : explicitUploadMessage(err) ? "This photo can't be used" : 'Error', err.response?.data?.message || 'Failed to update profile');
     } finally {
       setSaving(false);
     }
@@ -911,7 +616,7 @@ export const EditProfileScreen = () => {
     setCropModalVisible(false);
     setSaving(true);
     try {
-      const ext = croppedUri.split('.').pop()?.toLowerCase() || 'jpeg';
+      const ext = photoExtFromAsset(croppedUri);
       const filePayloads = [{ id: 'profile_crop', type: 'photo', ext, uri: croppedUri }];
       
       const presignRes = await api.post('/upload/presigned-urls', {
@@ -928,7 +633,7 @@ export const EditProfileScreen = () => {
         headers: { 'Content-Type': uploadTicket.contentType }
       });
       if (!uploadResponse.ok) throw new Error('Photo upload failed');
-      await api.post(`/upload/${uploadTicket.assetId}/complete`);
+      if ((await completeProfileUpload(uploadTicket.assetId)).review) { tellBeingChecked('photo'); return; }
 
       const data: any = {
         name: profile.name,
@@ -950,11 +655,32 @@ export const EditProfileScreen = () => {
     }
   };
 
-  // Check if photos have local (unsaved) additions
-  const hasUnsavedPhotos = currentPhotos.some(p => p.uri && !p.photoUrl);
+  const hasUnsavedPhotos = JSON.stringify(currentPhotos.map(p => p.photoUrl || p.uri)) !== JSON.stringify((profile.photos || []).map((p: any) => p.photoUrl || p.uri));
+  photoDraft.current = hasUnsavedPhotos;
+  usePreventRemove(hasUnsavedPhotos || saving, ({ data }) => {
+    // Do not exit while the current save is still running.
+    if (saving) return;
+    pendingExit.current = data.action;
+    setDiscardVisible(true);
+  });
+  const keepEditing = () => {
+    pendingExit.current = null;
+    setDiscardVisible(false);
+  };
+  const discardAndExit = () => {
+    const action = pendingExit.current;
+    pendingExit.current = null;
+    setDiscardVisible(false);
+    // Replay the original action. Navigation marks it as already confirmed for this screen.
+    if (action) navigation.dispatch(action);
+  };
+  const displayedAvatar = avatarUrl || currentPhotos[0]?.photoUrl || currentPhotos[0]?.uri;
+  const cropSource = currentPhotos[0]?.photoUrl || currentPhotos[0]?.uri || avatarUrl;
 
   return (
     <View style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor={colors.background} />
+      <PhotoDiscardDialog visible={discardVisible} onKeepEditing={keepEditing} onDiscard={discardAndExit} />
       <SuccessModal 
         visible={successVisible} 
         onDone={() => {
@@ -963,8 +689,8 @@ export const EditProfileScreen = () => {
         }} 
       />
 
-      {photoToCrop && (
-        <CropModal 
+      {photoToCrop && cropModalVisible && (
+        <AvatarCropModal
           visible={cropModalVisible}
           imageUri={photoToCrop}
           onCancel={() => {
@@ -972,6 +698,28 @@ export const EditProfileScreen = () => {
             setPhotoToCrop(null);
           }}
           onCropSave={handleInstantProfileCropSave}
+        />
+      )}
+      {newPhotoToCrop && (
+        <PhotoCropModal
+          imageUri={newPhotoToCrop.uri}
+          onCancel={() => { replacementPhoto.current = null; setNewPhotoToCrop(null); }}
+          onSave={(cropped) => {
+            const replacing = replacementPhoto.current;
+            const nextPhoto = {
+              ...newPhotoToCrop, ...cropped, mimeType: 'image/jpeg',
+              fileName: newPhotoToCrop.fileName?.replace(/\.[^.]+$/, '.jpg'),
+            };
+            setCurrentPhotos(prev => {
+              if (!replacing) return prev.length < 6 ? [...prev, nextPhoto] : prev;
+              const index = prev.findIndex(photo => replacing.id ? photo.id === replacing.id : (photo.photoUrl || photo.uri) === (replacing.photoUrl || replacing.uri));
+              if (index < 0) return prev;
+              return prev.map((photo, position) => position === index ? nextPhoto : photo);
+            });
+            precheck(nextPhoto, replacing);
+            replacementPhoto.current = null;
+            setNewPhotoToCrop(null);
+          }}
         />
       )}
 
@@ -1002,77 +750,102 @@ export const EditProfileScreen = () => {
       </Modal>
 
       {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color={colors.text.primary} />
+      <View style={[styles.header, { paddingTop: insets.top, height: insets.top + 52 }]}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton} accessibilityRole="button" accessibilityLabel="Back">
+          <Ionicons name="chevron-back" size={25} color="#FFFFFF" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Edit Profile</Text>
-        <View style={{ width: 40 }} />
+        <Text accessibilityRole="header" style={styles.headerTitle}>Edit profile</Text>
+        <TouchableOpacity onPress={handleSavePhotos} disabled={saving || checkingPhotos || !hasUnsavedPhotos}
+          style={[styles.headerSave, (saving || checkingPhotos || !hasUnsavedPhotos) && {opacity: 0.4}]}
+          activeOpacity={0.7} accessibilityRole="button" accessibilityLabel={checkingPhotos ? 'Save, waiting for the photo check' : 'Save photos'}
+          accessibilityState={{disabled: saving || checkingPhotos || !hasUnsavedPhotos, busy: saving || checkingPhotos}}>
+          {saving ? <ActivityIndicator size="small" color={palette.accentText}/> : <Text style={styles.headerSaveText}>Save</Text>}
+        </TouchableOpacity>
       </View>
 
-      <ScrollView
+      <GestureScrollView
+        ref={photoScrollRef}
+        onLayout={() => { scrollViewportReady.current = true; scrollToEntrySection(); }}
+        onContentSizeChange={() => { scrollContentReady.current = true; scrollToEntrySection(); }}
+        removeClippedSubviews={false}
         style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 12) + 16 }]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         scrollEnabled={scrollEnabled}
       >
+        <Text accessibilityRole="header" style={styles.mediaSectionLabel}>Photos & video</Text>
         {/* Avatar */}
-        <View style={{ alignItems: 'center', marginTop: 24, marginBottom: 16 }}>
+        <View style={styles.avatarCard}>
           <TouchableOpacity 
             activeOpacity={0.9}
-            style={{ 
-              width: 120, height: 120, borderRadius: 60, overflow: 'hidden', 
-              borderWidth: 3, borderColor: '#F94E27', backgroundColor: colors.surface 
-            }}
+            style={styles.avatarImage}
+            accessibilityRole="button" accessibilityLabel={displayedAvatar ? 'View avatar' : 'Add a profile photo'}
             onPress={() => {
               const url = avatarUrl || currentPhotos[0]?.photoUrl || currentPhotos[0]?.uri;
               if (url) setSelectedImageUrl(url);
+              else handleAddMediaPress();
             }}
           >
-            <Image 
-              source={{ uri: avatarUrl || currentPhotos[0]?.photoUrl || currentPhotos[0]?.uri || 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=800&auto=format&fit=crop' }} 
-              style={{ width: '100%', height: '100%' }} 
-            />
+            {displayedAvatar ? <Image source={{ uri: displayedAvatar }} style={{ width: '100%', height: '100%' }} />
+              : <Ionicons name="person-outline" size={28} color={palette.accent} />}
           </TouchableOpacity>
-          <Text style={{ marginTop: 12, fontSize: 13, color: colors.text.secondary, textAlign: 'center', paddingHorizontal: 40 }}>
-            This is your main circular avatar. It appears in chats and small previews.
-          </Text>
+          <View style={styles.avatarCopy}>
+            <Text style={styles.avatarTitle}>Profile photo</Text>
+            <Text style={styles.avatarHint}>Your avatar in chats and previews.</Text>
+            <TouchableOpacity onPress={() => cropSource ? handleCropProfile(cropSource) : handleAddMediaPress()} style={styles.avatarAdjust} activeOpacity={0.75} hitSlop={4} accessibilityRole="button">
+              <Ionicons name={cropSource ? 'crop-outline' : 'add'} size={15} color={palette.accent} />
+              <Text style={styles.avatarAdjustText}>{cropSource ? 'Adjust avatar' : 'Add a photo'}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
+        {/* The profile video: see it, play it, replace or remove it (saves at once). */}
+        <ProfileVideoSection onLayout={event => measureSection('video', event)} />
+
         {/* Grid Photos */}
-        <Text style={styles.sectionLabel}>Grid Photos</Text>
-        <Text style={styles.mediaHint}>Hold & drag to reorder. Tap crop on the first photo to change your Avatar.</Text>
-        <MediaGrid
+        <View style={styles.photosCard} onLayout={event => measureSection('photos', event)}>
+        <View style={styles.photosHeading}>
+          <Text style={styles.photosTitle}>Your photos</Text>
+          <Text style={styles.photosCount}>{currentPhotos.length} / 6</Text>
+        </View>
+        <Text style={styles.photoHint}>Keep at least one photo.</Text>
+        {pendingMedia.length > 0 && (
+          <View style={styles.pendingBox}>
+            <Text style={styles.pendingTitle}>Being checked</Text>
+            <Text style={styles.pendingHint}>Our team is looking at these. They go on your profile once approved - usually within a day.</Text>
+            <View style={styles.pendingRow}>
+              {pendingMedia.map((item) => (
+                <View key={item.id} style={styles.pendingItem}>
+                  {item.kind === 'profile_video'
+                    ? <View style={[styles.pendingThumb, styles.pendingVideo]}><Ionicons name="videocam-outline" size={22} color={palette.accent} /></View>
+                    : <Image source={{ uri: item.mediaUrl ?? undefined }} style={styles.pendingThumb} blurRadius={18} />}
+                  <TouchableOpacity style={styles.pendingRemove} onPress={() => withdrawPending(item.id)} hitSlop={8} accessibilityRole="button" accessibilityLabel={item.kind === 'profile_video' ? 'Remove video being checked' : 'Remove photo being checked'}>
+                    <Ionicons name="close" size={13} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+        <Text style={styles.photoInstruction}>Hold and drag to reorder. Your first photo leads your profile.</Text>
+        {/* A photo the selfie check could not match is marked on its own tile. */}
+        <FaceMediaNote />
+        <PhotoReorderGrid
+          embedded
+          issues={tileIssues}
           photos={currentPhotos}
+          onReplacePress={handleReplacePhoto}
           onPhotosChange={setCurrentPhotos}
           onAddPress={handleAddMediaPress}
-          onScrollLock={(locked) => setScrollEnabled(!locked)}
-          onCropProfile={(url) => {
-            setPhotoToCrop(url);
-            setCropModalVisible(true);
-          }}
+          onScrollLock={handleScrollLock}
+          onCropProfile={handleCropProfile}
+          scrollRef={photoScrollRef}
         />
-
-        {/* Save Photos button (only when there are unsaved local photos) */}
-        {hasUnsavedPhotos && (
-          <TouchableOpacity style={styles.savePhotosButton} onPress={handleSavePhotos} disabled={saving}>
-            <LinearGradient colors={['#FF8C00', '#F94E27']} style={styles.savePhotosGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-              {saving ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <>
-                  <Ionicons name="cloud-upload-outline" size={20} color="#fff" />
-                  <Text style={styles.savePhotosText}>Upload New Photos</Text>
-                </>
-              )}
-            </LinearGradient>
-          </TouchableOpacity>
-        )}
+        </View>
 
         {/* ── My Basics ── */}
-        {/* ── My Basics ── */}
-        <ListSection title="My Basics">
+        <ListSection title="Personal details" onLayout={event => measureSection('about', event)}>
           <ListRow icon="person" label="Name" value={profile.name || ''} locked />
           <ListRow
             icon="calendar-outline"
@@ -1081,13 +854,13 @@ export const EditProfileScreen = () => {
             onPress={() => navigation.navigate('EditBirthday', { currentBirthday: profile.birthday })}
           />
           <ListRow
-            icon="male-female-outline"
+            icon={ABOUT_ME_ICONS.gender}
             label="Gender"
             value={profile.gender || ''}
             onPress={() => navigation.navigate('EditGender', { currentGender: profile.gender, currentShowGender: profile.showGender })}
           />
           <ListRow
-            icon="heart-half-outline"
+            icon={ABOUT_ME_ICONS.orientation}
             label="Orientation"
             value={Array.isArray(profile.orientation) ? profile.orientation.join(', ') : (profile.orientation || '')}
             onPress={() => navigation.navigate('EditOrientation', { currentOrientation: profile.orientation, currentShowOrientation: profile.showOrientation })}
@@ -1099,8 +872,7 @@ export const EditProfileScreen = () => {
             onPress={() => navigation.navigate('EditSeeking', { currentSeeking: profile.seeking })}
           />
           <ListRow
-            icon="ruler"
-            iconFamily="MaterialCommunityIcons"
+            icon={ABOUT_ME_ICONS.height}
             label="Height"
             value={profile.height ? `${profile.height} cm` : ''}
             onPress={() => navigation.navigate('EditHeight', { currentHeight: profile.height })}
@@ -1109,163 +881,214 @@ export const EditProfileScreen = () => {
         </ListSection>
 
         {/* ── Bio ── */}
-        <ListSection title="Bio">
+        <View style={styles.listSectionContainer}>
           <TouchableOpacity
-            style={styles.bioListRow}
+            style={[styles.listBlock, styles.bioListRow]}
             onPress={() => navigation.navigate('EditBio', { currentBio: profile.preferences?.bio })}
             activeOpacity={0.6}
           >
             <View style={styles.bioListHeader}>
               <View style={styles.listRowIconContainer}>
-                <Ionicons name="document-text-outline" size={22} color="#F94E27" />
+                <Ionicons name="document-text-outline" size={19} color="#FFB8C7" />
               </View>
-              <Text style={styles.bioListTitle}>About me</Text>
-              <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
+              <Text style={styles.bioListTitle}>Bio</Text>
+              <Ionicons name="chevron-forward" size={17} color={palette.muted} />
             </View>
             <Text style={[styles.bioListText, !profile.preferences?.bio && styles.bioListTextEmpty]} numberOfLines={4}>
-              {profile.preferences?.bio || 'Write something about yourself to stand out...'}
+              {profile.preferences?.bio || 'Add a short introduction about yourself.'}
             </Text>
           </TouchableOpacity>
-        </ListSection>
+        </View>
 
         {/* ── Visibility ── */}
-        <ListSection title="Visibility">
+        <ListSection title="Visibility" onLayout={event => measureSection('visibility', event)}>
+          <Text style={styles.visibilityHint}>Choose which details appear on your profile.</Text>
           <ListToggleRow
             icon="eye-outline"
             label="Show Gender"
             value={profile.showGender ?? true}
             onToggle={(val) => handleToggle('showGender', val)}
-            saving={toggleSaving === 'showGender'}
+            saving={toggleSaving.has('showGender')}
           />
           <ListToggleRow
             icon="eye-outline"
             label="Show Orientation"
             value={profile.showOrientation ?? true}
             onToggle={(val) => handleToggle('showOrientation', val)}
-            saving={toggleSaving === 'showOrientation'}
+            saving={toggleSaving.has('showOrientation')}
             isLast
           />
         </ListSection>
 
         {/* ── Campus Life ── */}
-        <ListSection title="Campus Life">
-          <ListRow icon="business-outline" label="College" value={profile.college || ''} onPress={() => navigation.navigate('EditCollege', { currentCollege: profile.college })} />
-          <ListRow icon="book-outline" label="Department" value={profile.department || ''} onPress={() => navigation.navigate('EditDepartment', { currentDepartment: profile.department, currentYearOfStudy: profile.yearOfStudy })} />
-          <ListRow icon="business-outline" label="Graduation year" value={profile.graduationYear ? `${profile.graduationYear}` : ''} onPress={() => navigation.navigate('EditBatch', { currentBatch: profile.graduationYear })} />
+        <ListSection title="College & studies" onLayout={event => measureSection('campus', event)}>
+          <ListRow icon={CAMPUS_ICONS.college} label="College" value={profile.college || ''} onPress={() => navigation.navigate('EditCollege', { currentCollege: profile.college })} />
+          <ListRow icon={CAMPUS_ICONS.department} label="Department" value={profile.department || ''} onPress={() => navigation.navigate('EditDepartment', { currentDepartment: profile.department })} />
+          <ListRow icon={CAMPUS_ICONS.degree} label="Studies" value={studiesSummary(profile)} onPress={() => navigation.navigate('EditStudies', {currentDegree: profile.degree, currentYearOfStudy: profile.yearOfStudy, currentGraduationYear: profile.graduationYear})}/>
+          <ListRow icon={CAMPUS_ICONS.campus} label="Campus" value={profile.campus || ''} onPress={() => navigation.navigate('EditCampus', { currentCampus: profile.campus })} />
           <ListRow 
-            icon="school-outline" 
-            label="Year of Study" 
-            value={profile.yearOfStudy ? `${profile.yearOfStudy}${profile.yearOfStudy === 1 ? 'st' : profile.yearOfStudy === 2 ? 'nd' : profile.yearOfStudy === 3 ? 'rd' : 'th'} YR` : ''} 
-            onPress={() => navigation.navigate('EditYear', { currentYearOfStudy: profile.yearOfStudy })} 
-          />
-          <ListRow icon="location-outline" label="Campus" value={profile.campus || ''} onPress={() => navigation.navigate('EditCampus', { currentCampus: profile.campus })} />
-          <ListRow 
-            icon="home-outline" 
+            icon={CAMPUS_ICONS.residency} 
             label="Residency" 
             value={profile.isHosteller === true ? 'Hosteller' : profile.isHosteller === false ? 'Day Scholar' : ''} 
             onPress={() => navigation.navigate('EditResidency', { currentResidency: profile.isHosteller })} 
           />
-          <ListRow icon="happy-outline" label="Attendance Mood" value={profile.attendanceMood || ''} onPress={() => navigation.navigate('EditAttendanceMood', { currentMood: profile.attendanceMood })} />
-          <ListRow icon="navigate-outline" label="Distance (km)" value={profile.distancePreference ? `${profile.distancePreference} km` : ''} onPress={() => navigation.navigate('EditDistance', { currentDistance: profile.distancePreference })} isLast />
+          <ListRow icon={CAMPUS_ICONS.attendanceMood} label="Attendance Mood" value={profile.attendanceMood || ''} onPress={() => navigation.navigate('EditAttendanceMood', { currentMood: profile.attendanceMood })} isLast />
         </ListSection>
 
         {/* ── More About Me ── */}
-        <ListSection title="More About Me">
-          <ListRow icon="people-outline" label="Clubs" value={Array.isArray(profile.clubs) && profile.clubs.length > 0 ? profile.clubs.join(', ') : ''} onPress={() => navigation.navigate('EditSocial', { currentClubs: profile.clubs, currentAttendanceMood: profile.attendanceMood, currentHangoutSpot: Array.isArray(profile.hangoutSpots) ? profile.hangoutSpots[0] : '' })} />
-          <ListRow icon="fitness-outline" label="Lifestyle" value={profile.preferences?.lifestyle ? Object.values(profile.preferences.lifestyle).filter(Boolean).length + ' set' : ''} onPress={() => navigation.navigate('EditLifestyle', { currentLifestyle: profile.preferences?.lifestyle })} />
-          <ListRow icon="sparkles-outline" label="Personality" value={profile.preferences?.personality ? Object.values(profile.preferences.personality).filter(Boolean).length + ' set' : ''} onPress={() => navigation.navigate('EditPersonality', { currentPersonality: profile.preferences?.personality })} />
-          <ListRow icon="pricetags-outline" label="Interests" value={Array.isArray(profile.preferences?.interests) && profile.preferences.interests.length > 0 ? `${profile.preferences.interests.length} selected` : ''} onPress={() => navigation.navigate('EditInterests', { currentInterests: profile.preferences?.interests })} isLast />
+        <ListSection title="Interests & habits">
+          <ListRow icon={CAMPUS_ICONS.clubs} label="Clubs" value={Array.isArray(profile.clubs) && profile.clubs.length > 0 ? profile.clubs.join(', ') : ''} onPress={() => navigation.navigate('EditSocial', { currentClubs: profile.clubs, currentAttendanceMood: profile.attendanceMood, currentHangoutSpot: Array.isArray(profile.hangoutSpots) ? profile.hangoutSpots[0] : '' })} />
+          <ListRow icon={ABOUT_ME_ICONS.lifestyle} label="Lifestyle" value={profile.preferences?.lifestyle ? Object.values(profile.preferences.lifestyle).filter(Boolean).length + ' set' : ''} onPress={() => navigation.navigate('EditLifestyle', { currentLifestyle: profile.preferences?.lifestyle })} />
+          <ListRow icon={ABOUT_ME_ICONS.personality} label="Personality" value={profile.preferences?.personality ? Object.entries(profile.preferences.personality).filter(([id, value]) => id !== 'education' && value).length + ' set' : ''} onPress={() => navigation.navigate('EditPersonality', { currentPersonality: profile.preferences?.personality })} />
+          <ListRow icon={ABOUT_ME_ICONS.interests} label="Interests" value={Array.isArray(profile.preferences?.interests) && profile.preferences.interests.length > 0 ? `${profile.preferences.interests.length} selected` : ''} onPress={() => navigation.navigate('EditInterests', { currentInterests: profile.preferences?.interests })} isLast />
         </ListSection>
 
 
-        <View style={{ height: 40 }} />
-      </ScrollView>
+      </GestureScrollView>
 
-      <Modal visible={mediaActionVisible} transparent animationType="slide" onRequestClose={() => setMediaActionVisible(false)}>
-        <TouchableOpacity style={styles.actionSheetOverlay} activeOpacity={1} onPress={() => setMediaActionVisible(false)}>
-          <View style={styles.actionSheetContainer}>
-            <View style={styles.actionSheetHeader}>
-              <Text style={styles.actionSheetTitle}>Upload Photo</Text>
-              <Text style={styles.actionSheetSubtitle}>Choose a photo or take a new one</Text>
-            </View>
-            <TouchableOpacity style={styles.actionSheetButton} onPress={handleTakePhoto}>
-              <Ionicons name="camera-outline" size={24} color={colors.text.primary} />
-              <Text style={styles.actionSheetButtonText}>Take Photo</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionSheetButton} onPress={handlePickImage}>
-              <Ionicons name="images-outline" size={24} color={colors.text.primary} />
-              <Text style={styles.actionSheetButtonText}>Choose from Gallery</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.actionSheetButton, styles.cancelButton]} onPress={() => setMediaActionVisible(false)}>
-              <Text style={styles.cancelButtonText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
+      {/* Keep the sheet inside a gesture root while it shares this screen's
+          native window. */}
+      {mediaActionVisible && (
+        <GestureHandlerRootView style={styles.actionSheetOverlay} pointerEvents="box-none">
+          <Reanimated.View
+            style={[StyleSheet.absoluteFill, styles.actionSheetBackdrop, backdropStyle]}
+            pointerEvents="none"
+          />
+          <GesturePressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => closeMediaAction()}
+            accessibilityRole="button"
+            accessibilityLabel="Close photo options"
+          />
+          <Reanimated.View
+            onLayout={(e) => {
+              const measured = e.nativeEvent.layout.height;
+              if (measured > 0) sheetH.value = measured;
+            }}
+            style={[styles.actionSheetContainer, { paddingBottom: Math.max(insets.bottom, 12) + 12 }, sheetStyle]}
+          >
+            {/* Grab area: the bar and the header both drag the sheet. */}
+            <GestureDetector gesture={sheetPanGesture}>
+              <View>
+                <View style={styles.actionSheetHandleContainer}>
+                  <View style={styles.actionSheetHandleBar} />
+                </View>
+
+                <View style={styles.actionSheetHeader}>
+                  <Text style={styles.actionSheetTitle}>{replacementPhoto.current ? 'Replace Photo' : 'Upload Photo'}</Text>
+                  <Text style={styles.actionSheetSubtitle}>{replacementPhoto.current ? 'Choose a new photo. Your current photo stays until you save.' : 'Choose a photo or take a new one'}</Text>
+                </View>
+              </View>
+            </GestureDetector>
+
+            {/* Native gesture buttons follow the sheet's UI-thread transform on Android. */}
+            <GesturePressable style={({ pressed }) => [styles.actionSheetPillButton, pressed && styles.actionSheetPressed]}
+              onPress={handleTakePhoto} accessibilityRole="button" accessibilityLabel="Take photo">
+              <Ionicons name="camera" size={20} color="#FFFFFF" />
+              <Text style={styles.actionSheetPillText}>Take Photo</Text>
+            </GesturePressable>
+
+            <GesturePressable style={({ pressed }) => [styles.actionSheetPillButton, pressed && styles.actionSheetPressed]}
+              onPress={handlePickImage} accessibilityRole="button" accessibilityLabel="Choose photo from gallery">
+              <Ionicons name="images" size={20} color="#FFFFFF" />
+              <Text style={styles.actionSheetPillText}>Choose from Gallery</Text>
+            </GesturePressable>
+
+            <GesturePressable style={({ pressed }) => [styles.actionSheetCancelPillButton, pressed && styles.actionSheetPressed]}
+              onPress={() => closeMediaAction()} accessibilityRole="button" accessibilityLabel="Cancel photo selection">
+              <Text style={styles.actionSheetCancelPillText}>Cancel</Text>
+            </GesturePressable>
+          </Reanimated.View>
+        </GestureHandlerRootView>
+      )}
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#1F2125' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 50, paddingHorizontal: 16, paddingBottom: 16, backgroundColor: '#1F2125' },
-  backButton: { width: 40, height: 40, justifyContent: 'center' },
+  pendingBox: { marginTop: 6, marginBottom: 12, padding: 12, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.05)' },
+  pendingTitle: { fontSize: 14, fontWeight: '700', color: palette.text },
+  pendingHint: { marginTop: 2, fontSize: 12.5, lineHeight: 17, color: palette.secondary },
+  pendingRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
+  pendingItem: { width: 64, height: 80 },
+  pendingThumb: { width: 64, height: 80, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.08)' },
+  pendingVideo: { alignItems: 'center', justifyContent: 'center' },
+  pendingRemove: { position: 'absolute', top: -6, right: -6, width: 22, height: 22, borderRadius: 11, backgroundColor: '#3A3A3C', alignItems: 'center', justifyContent: 'center' },
+  mediaSectionLabel: {marginHorizontal: 18, marginTop: 8, marginBottom: 10, fontSize: 16, lineHeight: 22, fontFamily: 'DMSans_700Bold', color: editColors.text},
+  container: { flex: 1, backgroundColor: colors.background },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, backgroundColor: colors.background },
+  backButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: editColors.surface, alignItems: 'center', justifyContent: 'center' },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#FFFFFF',
+    flex: 1,
+    fontSize: 17,
+    fontFamily: 'DMSans_700Bold',
+    color: editColors.text,
   },
   scrollView: { flex: 1 },
-  scrollContent: { paddingBottom: 40, flexGrow: 1 },
-  sectionLabel: { fontSize: 13, fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase', letterSpacing: 1, marginTop: 28, marginBottom: 8, marginHorizontal: 20 },
+  scrollContent: { width: '100%', maxWidth: 600, alignSelf: 'center', paddingTop: 8 },
+  headerSave: { minWidth: 76, minHeight: 44, paddingHorizontal: 16, borderRadius: 22, backgroundColor: palette.accent, alignItems: 'center', justifyContent: 'center' },
+  headerSaveText: { color: palette.accentText, fontFamily: 'DMSans_700Bold', fontSize: 13 },
+  avatarCard: { marginHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, backgroundColor: palette.card, borderRadius: 18 },
+  avatarImage: { width: 64, height: 64, borderRadius: 32, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: '#393339' },
+  avatarCopy: { flex: 1, minWidth: 0 },
+  avatarTitle: { color: '#FFB8C7', fontFamily: 'DMSans_500Medium', fontSize: 14, lineHeight: 20 },
+  avatarHint: { color: '#DDD0D5', fontFamily: 'DMSans_400Regular', fontSize: 12, lineHeight: 17, marginTop: 3 },
+  avatarAdjust: { minHeight: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 8, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 18, backgroundColor: '#3B2933' },
+  avatarAdjustText: { color: palette.accent, fontFamily: 'DMSans_700Bold', fontSize: 12 },
+  photosCard: { marginHorizontal: 16, marginTop: 12, padding: 12, borderRadius: 18, backgroundColor: '#222222' },
+  photosHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 },
+  photoHint: { fontSize: 12, lineHeight: 18, fontFamily: 'DMSans_400Regular', color: '#F0DEE3', marginBottom: 6 },
+  photoInstruction: { fontSize: 11, lineHeight: 16, fontFamily: 'DMSans_400Regular', color: '#C7BEC1', marginBottom: 12 },
+  photosTitle: { color: '#FFB8C7', fontFamily: 'DMSans_500Medium', fontSize: 14, lineHeight: 20 },
+  photosCount: { color: palette.accent, fontFamily: 'DMSans_700Bold', fontSize: 12 },
+  sectionLabel: { fontSize: 16, lineHeight: 22, fontFamily: 'DMSans_700Bold', color: editColors.text, marginBottom: 8, marginHorizontal: 2 },
 
   // ── List Option D Styles ──
-  listSectionContainer: { marginHorizontal: 16, marginTop: 16 },
+  visibilityHint: { marginHorizontal: 16, marginTop: 12, marginBottom: 4, fontFamily: 'DMSans_400Regular', fontSize: 12, lineHeight: 18, color: palette.muted },
+  listSectionContainer: { marginHorizontal: 16, marginTop: 18 },
   listBlock: {
-    backgroundColor: colors.surface,
-    borderRadius: 16,
+    backgroundColor: palette.card,
+    borderRadius: 18,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
   },
   listRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 14,
+    minHeight: 64,
+    paddingVertical: 10,
     paddingHorizontal: 16,
   },
   listRowBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.04)',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: palette.separator,
   },
   listRowIconContainer: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(249, 78, 39, 0.1)',
+    width: 26,
+    height: 28,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 14,
+    marginRight: 10,
   },
   listRowContent: {
     flex: 1,
+    minWidth: 0,
     justifyContent: 'center',
   },
   listRowLabel: {
     fontSize: 12,
-    fontWeight: '500',
-    color: colors.text.secondary,
+    lineHeight: 17,
+    fontFamily: 'DMSans_400Regular',
+    color: editColors.muted,
     marginBottom: 2,
   },
   listRowValue: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#F8FAFC',
+    fontSize: 15,
+    lineHeight: 21,
+    fontFamily: 'DMSans_500Medium',
+    color: '#FFFFFF',
   },
   listRowValueEmpty: {
-    color: 'rgba(255,255,255,0.3)',
-    fontStyle: 'italic',
-    fontWeight: '500',
+    color: palette.accent,
   },
   listRowRight: {
     paddingLeft: 12,
@@ -1273,95 +1096,85 @@ const styles = StyleSheet.create({
 
   // ── Bio List Row ──
   bioListRow: {
-    padding: 16,
+    padding: 14,
   },
   bioListHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 6,
   },
   bioListTitle: {
     flex: 1,
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#F8FAFC',
+    fontSize: 14,
+    fontFamily: 'DMSans_500Medium',
+    color: '#FFB8C7',
   },
   bioListText: {
-    fontSize: 15,
-    color: colors.text.primary,
-    lineHeight: 22,
+    fontSize: 13,
+    fontFamily: 'DMSans_400Regular',
+    color: '#FFFFFF',
+    lineHeight: 19,
   },
   bioListTextEmpty: {
-    color: 'rgba(255,255,255,0.3)',
-    fontStyle: 'italic',
+    color: palette.accent,
   },
 
-  // ── Save Photos ──
-  savePhotosButton: { marginHorizontal: 16, marginTop: 16, borderRadius: 14, overflow: 'hidden' },
-  savePhotosGradient: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, gap: 8 },
-  savePhotosText: { fontSize: 15, fontWeight: '700', color: '#fff' },
-
   // ── Media Grid ──
-  mediaHint: { fontSize: 12, color: colors.text.tertiary, marginHorizontal: 20, marginBottom: 12, fontStyle: 'italic' },
-  mediaGrid: { marginHorizontal: GRID_MARGIN, height: SLOT_HEIGHT * 2 + GRID_GAP, position: 'relative' },
-  mediaSlot: { width: SLOT_WIDTH, height: SLOT_HEIGHT, borderRadius: 12, overflow: 'hidden', position: 'absolute', backgroundColor: colors.surface },
-  mediaImage: { width: '100%', height: '100%', resizeMode: 'cover' },
-  addMediaButton: { flex: 1, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: 'rgba(255,255,255,0.1)', borderStyle: 'dashed', borderRadius: 12 },
-  cropMediaButton: { position: 'absolute', bottom: 6, right: 6, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 12, width: 28, height: 28, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
-  removeMediaButton: { position: 'absolute', top: 4, right: 4, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 12, width: 24, height: 24, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
-  profileBadge: { position: 'absolute', bottom: 6, left: 6, flexDirection: 'row', alignItems: 'center', backgroundColor: '#F94E27', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 8, gap: 3 },
-  profileBadgeText: { fontSize: 9, fontWeight: '700', color: '#fff' },
-  slotNumber: { position: 'absolute', top: 6, left: 6, width: 20, height: 20, borderRadius: 10, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  slotNumberText: { fontSize: 11, fontWeight: '700', color: '#fff' },
+  mediaHint: { fontSize: 11, lineHeight: 16, fontFamily: 'DMSans_400Regular', color: '#DDD0D5', marginHorizontal: 16, marginBottom: 10 },
 
   // ── Action Sheet ──
-  actionSheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  actionSheetContainer: { backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 40 },
-  actionSheetHeader: { alignItems: 'center', marginBottom: 20 },
-  actionSheetTitle: { fontSize: 18, fontWeight: '700', color: colors.text.primary, marginBottom: 4 },
-  actionSheetSubtitle: { fontSize: 14, color: colors.text.secondary },
-  actionSheetButton: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: colors.border, gap: 12 },
-  actionSheetButtonText: { fontSize: 16, color: colors.text.primary, fontWeight: '500' },
-  cancelButton: { marginTop: 8, borderBottomWidth: 0, justifyContent: 'center' },
-  cancelButtonText: { fontSize: 16, color: colors.error, fontWeight: '600' },
+  actionSheetOverlay: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'transparent', justifyContent: 'flex-end', zIndex: 100, elevation: 100 },
+  actionSheetBackdrop: { backgroundColor: 'rgba(0, 0, 0, 0.55)' },
+  actionSheetContainer: {
+    // Start off-screen. useAnimatedStyle applies on the UI thread and is not
+    // guaranteed to have run for the first frame after mount, which otherwise
+    // paints the sheet at its resting position before it snaps down to slide
+    // up - read as a flicker on open. The animated style overrides this.
+    transform: [{ translateY: SHEET_CLOSED_OFFSET }],
+    backgroundColor: palette.card,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+  },
+  actionSheetHandleContainer: { width: '100%', alignItems: 'center', paddingTop: 14, paddingBottom: 10 },
+  actionSheetHandleBar: { width: 48, height: 5, borderRadius: 2.5, backgroundColor: 'rgba(255, 255, 255, 0.4)' },
+  actionSheetHeader: { alignItems: 'center', marginBottom: 14, marginTop: 2 },
+  actionSheetTitle: { fontSize: 18, fontFamily: 'DMSans_700Bold', color: '#FFFFFF', marginBottom: 4 },
+  actionSheetSubtitle: { fontSize: 12, fontFamily: 'DMSans_400Regular', color: palette.secondary },
+  actionSheetPillButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#353135',
+    marginBottom: 10,
+    gap: 10,
+  },
+  actionSheetPillText: { fontSize: 15, color: '#FFFFFF', fontWeight: '600' },
+  actionSheetPressed: { opacity: 0.8 },
+  actionSheetCancelPillButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: palette.dangerSurface,
+    marginTop: 4,
+  },
+  actionSheetCancelPillText: { fontSize: 14, color: palette.danger, fontFamily: 'DMSans_700Bold' },
 
   // ── Success Modal ──
   successModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center', padding: 24 },
-  successCard: { width: '100%', maxWidth: 320, backgroundColor: 'rgba(28, 28, 30, 0.98)', borderRadius: 24, padding: 32, alignItems: 'center', borderWidth: 0.8, borderColor: 'rgba(255,255,255,0.12)', shadowColor: '#000', shadowOffset: { width: 0, height: 20 }, shadowOpacity: 0.4, shadowRadius: 30, elevation: 20 },
-  iconBloomContainer: { width: 120, height: 120, justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
-  iconHaloOuter: { position: 'absolute', width: 110, height: 110, borderRadius: 55 },
-  iconHaloInner: { position: 'absolute', width: 85, height: 85, borderRadius: 42.5 },
-  successIconCircle: { width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', shadowColor: '#F94E27', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.3, shadowRadius: 15, elevation: 12 },
-  successTitle: { fontSize: 22, fontWeight: '800', color: '#fff', marginBottom: 12, textAlign: 'center', letterSpacing: 0.5 },
-  successSubtitle: { fontSize: 15, color: 'rgba(255,255,255,0.6)', lineHeight: 22, textAlign: 'center', marginBottom: 32, paddingHorizontal: 8 },
-  doneButton: { width: '100%', height: 56 },
-  doneButtonGradient: { flex: 1, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
-  doneButtonText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  successCard: { width: '100%', maxWidth: 320, backgroundColor: palette.card, borderRadius: 22, padding: 24, alignItems: 'center' },
+  successIconCircle: { width: 54, height: 54, borderRadius: 27, backgroundColor: palette.accent, justifyContent: 'center', alignItems: 'center', marginBottom: 14 },
+  successTitle: { fontSize: 21, fontFamily: 'DMSans_700Bold', color: '#FFFFFF', marginBottom: 16, textAlign: 'center' },
+  doneButton: { width: '100%', height: 46, borderRadius: 23, backgroundColor: palette.accent, alignItems: 'center', justifyContent: 'center' },
+  doneButtonText: { color: palette.accentText, fontSize: 14, fontFamily: 'DMSans_700Bold' },
 
   // ── Image Viewer ──
   imageViewerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center', alignItems: 'center' },
   fullScreenImage: { width: width, height: width * 1.5, maxHeight: '80%' },
   closeViewerButton: { position: 'absolute', top: 60, right: 20, zIndex: 10, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 10, elevation: 5 },
 
-  // ── Premium Toggle Styles ──
-  toggleTrack: {
-    width: 48,
-    height: 28,
-    borderRadius: 14,
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-  },
-  toggleThumb: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 2,
-  },
 });
