@@ -1,63 +1,18 @@
 import { Request, Response } from 'express';
-import { HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { ProfileNudity } from '../services/profile-nudity.service';
+import type { NudityVerdict } from '../services/nudity.service';
+import { DeleteObjectCommand, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { s3Client, transformToCdnUrl } from '../middlewares/upload.middleware';
 import { v4 as uuidv4 } from 'uuid';
 import { MediaCacheService } from '../services/mediaCache.service';
 import { prisma } from '../utils/prisma';
 import { HttpError } from '../utils/httpError';
+import { ProfileMediaProcessingService } from '../services/profile-media-processing.service';
+import { PrivateMediaInspectionService } from '../services/private-media-inspection.service';
+import { publicMediaBucket, publicObjectUrl } from '../config/storage';
 
 export class UploadController {
-  static async uploadFiles(req: Request, res: Response) {
-    try {
-      const files = (req.files ?? (req.file ? [req.file] : undefined)) as { [fieldname: string]: Express.MulterS3.File[] } | Express.MulterS3.File[] | undefined;
-      
-      if (!files) {
-        return res.status(400).json({ status: 'error', message: 'No files were uploaded.' });
-      }
-      const userId = (req as any).user.sub;
-      const uploadedFiles = (Array.isArray(files) ? files : Object.values(files).flat()) as Express.MulterS3.File[];
-      if (uploadedFiles.some((file) => file.size > (file.mimetype.startsWith('video/') ? 100 * 1024 * 1024 : 15 * 1024 * 1024))) {
-        return res.status(400).json({ status: 'error', message: 'Uploaded media exceeds its size limit' });
-      }
-      await prisma.profileMediaAsset.createMany({
-        data: uploadedFiles.map((file) => ({
-          ownerId: userId,
-          objectKey: file.key,
-          purpose: file.mimetype.startsWith('video/') ? 'video' : 'photo',
-          contentType: file.mimetype,
-          maxBytes: file.mimetype.startsWith('video/') ? 100 * 1024 * 1024 : 15 * 1024 * 1024,
-          status: 'uploaded',
-          expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-        })),
-        skipDuplicates: true,
-      });
-
-      // If it's single or array upload
-      if (Array.isArray(files)) {
-         const urls = files.map(file => transformToCdnUrl(file.location));
-         
-         await MediaCacheService.cacheUserMedia(userId);
-         
-         return res.status(200).json({ status: 'success', data: { urls } });
-      }
-
-      // If it's multiple fields (e.g. video and photos separated)
-      const data: Record<string, string[]> = {};
-      for (const field in files) {
-        data[field] = files[field].map(file => transformToCdnUrl(file.location));
-      }
-
-      await MediaCacheService.cacheUserMedia(userId);
-
-      return res.status(200).json({ status: 'success', data });
-      
-    } catch (error: any) {
-      console.error('Upload Error:', error);
-      return res.status(500).json({ status: 'error', message: error.message || 'Error uploading files' });
-    }
-  }
-
   static async getPresignedUrls(req: Request, res: Response) {
     try {
       const { files } = req.body;
@@ -78,9 +33,8 @@ export class UploadController {
         return res.status(400).json({ status: 'error', message: 'Media count exceeds the profile limit' });
       }
 
-      const bucket = process.env.AWS_S3_BUCKET_NAME;
-      if (!bucket) throw new Error('AWS_S3_BUCKET_NAME is required');
-      const region = process.env.AWS_REGION || 'us-east-1';
+      const bucket = publicMediaBucket();
+      if (!bucket) throw new Error('The public media bucket is not configured');
       const presignedUrls = await Promise.all(files.map(async (file) => {
         const folder = file.type === 'video' ? 'videos' : 'photos';
         const ext = String(file.ext).toLowerCase();
@@ -105,11 +59,9 @@ export class UploadController {
         try { uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 }); }
         catch (error) { await prisma.profileMediaAsset.delete({ where: { id: asset.id } }).catch(() => undefined); throw error; }
         
-        const s3FileUrl = `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
-        
         return {
           uploadUrl,
-          fileUrl: transformToCdnUrl(s3FileUrl),
+          fileUrl: transformToCdnUrl(publicObjectUrl(key)),
           type: file.type
           , assetId: asset.id
           , contentType
@@ -132,18 +84,56 @@ export class UploadController {
       });
       if (!asset) throw new HttpError(404, 'Media upload is unavailable', 'MEDIA_UPLOAD_UNAVAILABLE');
       let head;
-      try { head = await s3Client.send(new HeadObjectCommand({ Bucket: process.env.AWS_S3_BUCKET_NAME || '', Key: asset.objectKey })); }
+      try { head = await s3Client.send(new HeadObjectCommand({ Bucket: publicMediaBucket() || '', Key: asset.objectKey })); }
       catch { throw new HttpError(400, 'Media upload was not found', 'MEDIA_UPLOAD_MISSING'); }
-      if (!head.ContentLength || head.ContentLength > asset.maxBytes || head.ContentType !== asset.contentType) {
+      let nudity: NudityVerdict = 'unchecked';
+      if (!head.ContentLength || head.ContentLength > asset.maxBytes) {
         await prisma.profileMediaAsset.update({ where: { id: asset.id }, data: { status: 'rejected' } });
         throw new HttpError(400, 'Uploaded media does not match its ticket', 'MEDIA_UPLOAD_INVALID');
       }
-      await prisma.profileMediaAsset.update({ where: { id: asset.id }, data: { status: 'uploaded' } });
-      const region = process.env.AWS_REGION || 'us-east-1';
-      return res.status(200).json({ status: 'success', data: { assetId: asset.id, fileUrl: transformToCdnUrl(`https://${process.env.AWS_S3_BUCKET_NAME}.s3.${region}.amazonaws.com/${asset.objectKey}`) } });
+      // The Content-Type the client's PUT actually sent is not trustworthy: on
+      // some devices (notably Android emulators, where a fetch()+Blob upload
+      // does not reliably carry the header we set) it can differ from what was
+      // declared when the ticket was issued, even though the bytes are a
+      // perfectly valid photo. The real bytes are sniffed instead, and that is
+      // what decides whether the upload is accepted.
+      const ALLOWED_PHOTO_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+      try {
+        const detected = await PrivateMediaInspectionService.detect(publicMediaBucket() || '', asset.objectKey);
+        if (asset.purpose === 'photo') {
+          if (!detected || !ALLOWED_PHOTO_TYPES.has(detected)) throw new HttpError(400, 'The file is not a supported photo', 'MEDIA_UPLOAD_INVALID');
+          const renditions = await ProfileMediaProcessingService.processPhoto(asset.objectKey, {
+            contentType: detected,
+            maxBytes: asset.maxBytes,
+          });
+          await prisma.profileMediaAsset.update({
+            where: { id: asset.id },
+            data: { status: 'uploaded', contentType: detected, ...renditions, processingStatus: 'completed', processedAt: new Date() },
+          });
+        } else {
+          if (!detected?.startsWith('video/')) throw new HttpError(400, 'The file is not a video', 'MEDIA_UPLOAD_INVALID');
+          await prisma.profileMediaAsset.update({ where: { id: asset.id }, data: { status: 'uploaded', contentType: detected } });
+        }
+        // The nudity check (docs/NUDITY_CHECK.md): refused at once when explicit,
+        // held for the team when borderline. Never holds the upload up when the
+        // check itself is down - that is "unchecked", and checked later.
+        nudity = await ProfileNudity.check(userId, { ...asset, contentType: detected }, transformToCdnUrl(publicObjectUrl(asset.objectKey)));
+      } catch (error) {
+        if (!(error instanceof HttpError)) throw error;
+        await prisma.profileMediaAsset.update({ where: { id: asset.id }, data: { status: 'rejected' } });
+        await s3Client
+          .send(new DeleteObjectCommand({ Bucket: publicMediaBucket() || '', Key: asset.objectKey }))
+          .catch(() => undefined);
+        throw error;
+      }
+      return res.status(200).json({ status: 'success', data: {
+        assetId: asset.id, fileUrl: transformToCdnUrl(publicObjectUrl(asset.objectKey)),
+        // "review": saved, but only shown once the team approves it.
+        review: nudity === 'review',
+      } });
     } catch (error: any) {
       const status = error instanceof HttpError ? error.status : 500;
-      return res.status(status).json({ status: 'error', message: error.message || 'Could not complete upload' });
+      return res.status(status).json({ status: 'error', message: error.message || 'Could not complete upload', ...(error instanceof HttpError ? { code: error.code } : {}) });
     }
   }
 

@@ -1,8 +1,10 @@
 import { Request, Response, NextFunction } from "express";
+import { ERASED_POSITION, LocationService, SAVE_PLACE_FIX_MINUTES } from "../services/location.service";
 import { prisma } from "../utils/prisma";
 import {
   discoverySettingsSchema,
   ageAt,
+  hasFreshLocation,
 } from "../services/eligibility.service";
 import { HttpError } from "../utils/httpError";
 export class DiscoverySettingsController {
@@ -17,6 +19,9 @@ export class DiscoverySettingsController {
           maxAgePref: true,
           discoveryMode: true,
           distancePreference: true,
+          expandRadius: true,
+          collegeScope: true,
+          campusId: true,
           preferencesConfirmedAt: true,
           college: true,
           birthday: true,
@@ -45,14 +50,32 @@ export class DiscoverySettingsController {
         throw new HttpError(400, "Set a valid adult birthday in your profile");
       if (parsed.data.discoveryMode === "college" && !me.college?.trim())
         throw new HttpError(400, "Set your college first");
-      if (
-        parsed.data.discoveryMode === "distance" &&
-        (me.latitude === null || me.longitude === null || !me.locationConsentAt)
-      )
+      // Distance mode needs a location recent enough to use (LOCATION_SPEC.md
+      // 6.8). A fix shared moments ago from college mode is kept only as the
+      // baseline, so switching promotes it to the displayed location.
+      const justShared =
+        me.liveLatitude !== null &&
+        me.liveLongitude !== null &&
+        !!me.liveUpdatedAt &&
+        Date.now() - me.liveUpdatedAt.getTime() <= SAVE_PLACE_FIX_MINUTES * 60_000;
+      const promote =
+        parsed.data.discoveryMode === "distance" && !hasFreshLocation(me) && justShared && !!me.locationConsentAt;
+      if (parsed.data.discoveryMode === "distance" && !hasFreshLocation(me) && !promote)
         throw new HttpError(
           400,
           "Share your location first, or select college discovery",
+          "LOCATION_REQUIRED",
         );
+      // "My campus" with no campus set would match nobody, silently.
+      if (parsed.data.collegeScope === "campus" && !me.campusId)
+        throw new HttpError(400, "Choose your campus in your profile first", "CAMPUS_REQUIRED");
+      // Only a real change to the radius counts against the daily budget; the
+      // app sends it on every save (LOCATION_SPEC.md 6.3).
+      const radiusChanged = await LocationService.assertRadiusChangeAllowed(
+        id,
+        me.distancePreference,
+        parsed.data.distancePreference,
+      );
       const updated = await prisma.user.update({
         where: { id },
         data: {
@@ -60,8 +83,23 @@ export class DiscoverySettingsController {
           showMeCategories: [...new Set(parsed.data.showMeCategories)],
           preferencesConfirmedAt: new Date(),
           eligibilityVersion: { increment: 1 },
+          // College mode is decided by verified membership alone, so stored
+          // coordinates would have no purpose - and data without a purpose is
+          // erased, not kept (LOCATION_SPEC.md 6.6, DPDP). The consent stamp
+          // stays as the audit record; sharing again asks again.
+          ...(parsed.data.discoveryMode === "college" ? ERASED_POSITION : {}),
+          ...(promote
+            ? {
+              latitude: me.liveLatitude,
+              longitude: me.liveLongitude,
+              locationUpdatedAt: new Date(),
+              locationSource: "live",
+              activePlaceId: null,
+            }
+            : {}),
         },
       });
+      if (radiusChanged) await LocationService.recordRadiusChange(id);
       res.json({
         success: true,
         data: { preferencesConfirmedAt: updated.preferencesConfirmedAt },

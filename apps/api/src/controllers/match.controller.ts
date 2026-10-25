@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { MatchService } from '../services/match.service';
+import { NewMatchService } from '../services/new-match.service';
 import { ApiResponse } from '../utils/ApiResponse';
 
 export class MatchController {
@@ -17,6 +18,25 @@ export class MatchController {
     } catch (error) {
       next(error);
     }
+  }
+
+  static async newMatches(req: Request, res: Response, next: NextFunction) {
+    try {
+      res.status(200).json(ApiResponse.success(await NewMatchService.list((req as any).user.sub)));
+    } catch (error) { next(error); }
+  }
+
+  static async markSeen(req: Request, res: Response, next: NextFunction) {
+    try {
+      res.status(200).json(ApiResponse.success(await NewMatchService.markSeen((req as any).user.sub, String(req.params.matchId))));
+    } catch (error) { next(error); }
+  }
+
+  static async intro(req: Request, res: Response, next: NextFunction) {
+    try {
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(200).json(ApiResponse.success(await NewMatchService.intro((req as any).user.sub, String(req.params.matchId))));
+    } catch (error) { next(error); }
   }
 
   static async swipe(req: Request, res: Response, next: NextFunction) {

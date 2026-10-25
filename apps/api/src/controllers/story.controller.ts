@@ -2,6 +2,8 @@ import { NextFunction, Request, Response } from 'express';
 import { ApiResponse } from '../utils/ApiResponse';
 import { FollowService } from '../services/follow.service';
 import { StoryService } from '../services/story.service';
+import { HttpError } from '../utils/httpError';
+import { StoryInsightService } from '../services/story-insight.service';
 
 const userId = (req: Request) => (req as any).user.sub as string;
 
@@ -39,6 +41,22 @@ export class StoryController {
   static async feed(req: Request, res: Response, next: NextFunction) {
     try { res.json(ApiResponse.success(await StoryService.feedPage(userId(req), typeof req.query.cursor === 'string' ? req.query.cursor : undefined, Number(req.query.limit ?? 50)))); } catch (error) { next(error); }
   }
+  static async tray(req: Request, res: Response, next: NextFunction) {
+    try { res.json(ApiResponse.success(await StoryService.tray(userId(req)))); } catch (error) { next(error); }
+  }
+  /** One person's live Stories as a tray group, to open them from their profile. */
+  static async owner(req: Request, res: Response, next: NextFunction) {
+    try {
+      const ownerId = String(req.params.userId ?? '');
+      if (!/^[0-9a-f-]{36}$/i.test(ownerId)) throw new HttpError(404, 'Story is unavailable', 'STORY_UNAVAILABLE');
+      const group = await StoryService.ownerGroup(userId(req), ownerId);
+      if (!group) throw new HttpError(404, 'Story is unavailable', 'STORY_UNAVAILABLE');
+      res.json(ApiResponse.success({ group }));
+    } catch (error) { next(error); }
+  }
+  static async like(req: Request, res: Response, next: NextFunction) {
+    try { res.json(ApiResponse.success(await StoryService.setLike(userId(req), String(req.params.storyId), req.body.liked))); } catch (error) { next(error); }
+  }
   static async readUrl(req: Request, res: Response, next: NextFunction) {
     try { res.json(ApiResponse.success(await StoryService.readUrl(userId(req), String(req.params.storyId)))); } catch (error) { next(error); }
   }
@@ -52,6 +70,7 @@ export class StoryController {
     try {
       res.json(ApiResponse.success(await StoryService.viewersPage(
         userId(req), String(req.params.storyId), typeof req.query.cursor === 'string' ? req.query.cursor : undefined, Number(req.query.limit ?? 50),
+        typeof req.query.q === 'string' ? req.query.q : undefined,
       )));
     } catch (error) { next(error); }
   }
@@ -62,9 +81,22 @@ export class StoryController {
     try { res.json(ApiResponse.success(await StoryService.mute(userId(req), String(req.params.authorId), req.body.muted))); } catch (error) { next(error); }
   }
   static async reply(req: Request, res: Response, next: NextFunction) {
-    try { res.status(201).json(ApiResponse.success(await StoryService.reply(userId(req), String(req.params.storyId), req.body.content, req.body.clientMessageId))); } catch (error) { next(error); }
+    try {
+      res.status(201).json(ApiResponse.success(await StoryService.reply(
+        userId(req), String(req.params.storyId), req.body.content, req.body.clientMessageId, req.body.kind ?? 'text',
+      )));
+    } catch (error) { next(error); }
   }
   static async settings(req: Request, res: Response, next: NextFunction) {
     try { res.json(ApiResponse.success(await StoryService.settings(userId(req), req.body))); } catch (error) { next(error); }
+  }
+  static async recordInsightEvents(req: Request, res: Response, next: NextFunction) {
+    try {
+      await StoryInsightService.recordEvents(userId(req), req.body.batchId, req.body.events);
+      res.status(202).json(ApiResponse.success({ recorded: true }));
+    } catch (error) { next(error); }
+  }
+  static async insights(req: Request, res: Response, next: NextFunction) {
+    try { res.json(ApiResponse.success(await StoryInsightService.get(userId(req), String(req.params.storyId)))); } catch (error) { next(error); }
   }
 }

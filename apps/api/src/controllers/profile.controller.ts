@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
-import { snapToGrid, isValidCoords } from '../utils/geo';
+import { isValidCoords } from '../utils/geo';
+import { LocationService } from '../services/location.service';
 import { prisma } from '../utils/prisma';
 import { ProfileService } from '../services/profile.service';
 import { ApiResponse } from '../utils/ApiResponse';
@@ -7,8 +8,15 @@ import { ApiResponse } from '../utils/ApiResponse';
 import { MediaCacheService } from '../services/mediaCache.service';
 import { RecommendationService } from '../services/recommendation.service';
 import { OnboardingService } from '../services/onboarding.service';
+import { MatchProfileService } from '../services/match-profile.service';
 
 export class ProfileController {
+  static async getMatchProfile(req: Request, res: Response, next: NextFunction) {
+    try {
+      const profile = await MatchProfileService.get((req as any).user.sub, String(req.params.matchId));
+      res.json(ApiResponse.success(profile));
+    } catch (error) { next(error); }
+  }
   static async getReadiness(req: Request, res: Response, next: NextFunction) {
     try {
       const status = await OnboardingService.getStatus((req as any).user.sub);
@@ -17,12 +25,10 @@ export class ProfileController {
       next(error);
     }
   }
+  /** Withdraws location consent and erases every stored position, saved places included. */
   static async removeLocation(req: Request, res: Response, next: NextFunction) {
     try {
-      await prisma.user.update({ where: { id: (req as any).user.sub }, data: {
-        latitude: null, longitude: null, locationConsentAt: null, locationUpdatedAt: null,
-        preferencesConfirmedAt: null, eligibilityVersion: { increment: 1 },
-      } });
+      await LocationService.erase((req as any).user.sub);
       res.json({ success: true });
     } catch (error) { next(error); }
   }
@@ -64,36 +70,24 @@ export class ProfileController {
   static async updateLocation(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = (req as any).user.sub;
-      const { latitude, longitude } = req.body ?? {};
+      const { latitude, longitude, accuracy, accuracyM } = req.body ?? {};
 
       if (!isValidCoords({ latitude, longitude })) {
         return res.status(400).json(ApiResponse.error('Invalid coordinates'));
       }
+      if (accuracy !== undefined && accuracy !== 'precise' && accuracy !== 'approximate') {
+        return res.status(400).json(ApiResponse.error('Invalid accuracy'));
+      }
+      if (accuracyM !== undefined && (typeof accuracyM !== 'number' || !Number.isFinite(accuracyM) || accuracyM < 0)) {
+        return res.status(400).json(ApiResponse.error('Invalid accuracy radius'));
+      }
 
-      const snapped = snapToGrid({ latitude, longitude });
+      // The service invalidates the viewer's deck itself when the cell moves.
+      const result = await LocationService.update(userId, { latitude, longitude }, { accuracy, accuracyM });
 
-      // Record consent on the first location write. The client is required to
-      // have shown the standalone location consent prompt before calling this;
-      // we stamp the time so the grant is auditable.
-      const existing = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { locationConsentAt: true },
-      });
-
-      await prisma.user.update({
-        where: { id: userId },
-        data: {
-          latitude: snapped.latitude,
-          longitude: snapped.longitude,
-          locationUpdatedAt: new Date(),
-          locationConsentAt: existing?.locationConsentAt ?? new Date(),
-        },
-      });
-
-      // Moving changes who is nearby, so the cached deck is stale.
-      await RecommendationService.invalidateCache(userId);
-
-      return res.status(200).json(ApiResponse.success(null, 'Location updated'));
+      // The snapped cell goes back to its owner, so the app can tell locally
+      // whether a later fix has moved cells and skip writes that would not.
+      return res.status(200).json(ApiResponse.success(result, 'Location updated'));
     } catch (error) {
       return next(error);
     }
