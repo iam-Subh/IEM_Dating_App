@@ -51,7 +51,9 @@ async function authorization(userId: string) {
   await prisma.userSession.create({
     data: { userId, tokenJti: jti, expiresAt: new Date(Date.now() + 60_000) },
   });
-  const token = generateTokens(userId, `${userId}@security.example.test`, jti).accessToken;
+  // Signed with the account's current session version, as a real sign-in is.
+  const { sessionVersion, role } = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { sessionVersion: true, role: true } });
+  const token = generateTokens(userId, `${userId}@security.example.test`, jti, role, sessionVersion).accessToken;
   return { Authorization: `Bearer ${token}` };
 }
 
@@ -340,11 +342,17 @@ test('account deletion can be cancelled and due requests erase personal data', a
   const requested = await request(app).post('/api/v1/account/deletion').set(auth).send({ confirmation: 'DELETE' });
   assert.equal(requested.status, 202);
   assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: deletionUserId } })).accountStatus, 'deletion_pending');
-  assert.equal((await request(app).get('/api/v1/discover/recommendations').set(auth)).status, 403);
-  assert.equal((await request(app).delete('/api/v1/account/deletion').set(auth)).status, 200);
+  // Requesting deletion signs out every device, the one that asked too.
+  assert.equal((await request(app).get('/api/v1/discover/recommendations').set(auth)).status, 401);
+  assert.equal(await prisma.userSession.count({ where: { userId: deletionUserId, revokedAt: null } }), 0);
+  // Signing in again within the 30 days: the account stays out of discovery until kept.
+  const again = await authorization(deletionUserId);
+  assert.equal((await request(app).get('/api/v1/discover/recommendations').set(again)).status, 403);
+  assert.ok((await request(app).get('/api/v1/account/deletion').set(again)).body.data.scheduledFor);
+  assert.equal((await request(app).delete('/api/v1/account/deletion').set(again)).status, 200);
   assert.equal((await prisma.user.findUniqueOrThrow({ where: { id: deletionUserId } })).accountStatus, 'active');
 
-  const second = await request(app).post('/api/v1/account/deletion').set(auth).send({ confirmation: 'DELETE' });
+  const second = await request(app).post('/api/v1/account/deletion').set(again).send({ confirmation: 'DELETE', reason: 'taking_a_break' });
   await prisma.accountDataRequest.update({
     where: { id: second.body.data.id },
     data: { scheduledFor: new Date(Date.now() - 1000) },
@@ -411,15 +419,11 @@ test('OTP challenges are single use, purpose bound, and proof tokens are consume
   await OTPService.consumeProof(identifier, 'registration', proof);
   await assert.rejects(() => OTPService.consumeProof(identifier, 'registration', proof));
 
-  const phone = `+91${Math.floor(1_000_000_000 + Math.random() * 9_000_000_000)}`;
-  const phoneChallenge = await OTPService.issue(phone, 'phone_login');
-  assert.equal((await OTPService.verify(phone, 'registration', phoneChallenge.challengeId, phoneChallenge.code)).valid, false);
-  assert.equal((await OTPService.verify(phone, 'phone_login', phoneChallenge.challengeId, phoneChallenge.code)).valid, true);
 });
 
 test('student membership verification controls the first onboarding step', async () => {
   const userId = randomUUID();
-  await prisma.user.create({ data: { ...user(userId), email: null, phone: `+91${Date.now().toString().slice(-10)}` } });
+  await prisma.user.create({ data: { ...user(userId), email: null } });
   assert.equal((await OnboardingService.getStatus(userId)).nextRequiredStep, 'studentVerification');
   const email = `${userId}2024@iem.edu.in`;
   const challenge = await OTPService.issue(email, 'student_membership');

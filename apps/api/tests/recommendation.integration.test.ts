@@ -15,7 +15,7 @@ import { decodeCursor } from "../src/services/deck.service";
 import request from "supertest";
 import app from "../src/app";
 import { generateTokens } from "../src/utils/jwt";
-import { SearchService } from "../src/services/search.service";
+import { ExploreService } from "../src/services/explore.service";
 const url = new URL(process.env.DATABASE_URL ?? "http://invalid");
 if (
   !["127.0.0.1", "localhost"].includes(url.hostname) ||
@@ -50,7 +50,6 @@ function profile(id: string, category = "woman") {
     name: "Test profile",
     passwordHash: "PRIVATE_PASSWORD",
     email: `${id}@example.test`,
-    phone: null,
     birthday: new Date("2003-01-01"),
     age: 23,
     college: "IEM",
@@ -199,22 +198,26 @@ test("Explore rejects small cohorts and excessive filter combinations without re
     where: { id: { in: rareIds.slice(0, 9) } },
     data: { preferences: { interests: ["rare_interest"] } },
   });
+  // A cohort under the floor is now a state rather than a thrown error, so the
+  // app can tell "too small to show" from "you have seen everyone" and from a
+  // failed request (EXPLORE_SPEC.md, sections 6 and 7.4). It still carries no count.
+  const tooSmall = await ExploreService.page(viewerId, { interests: ["rare_interest"] });
+  assert.equal(tooSmall.state, "cohort_too_small");
+  assert.equal(tooSmall.cards.length, 0);
+  assert.equal("cohortSize" in tooSmall, false);
+  assert.equal(JSON.stringify(tooSmall).includes('"9"'), false);
   await assert.rejects(
-    () => SearchService.explore(viewerId, { interests: ["rare_interest"] }),
-    (error: any) => error.code === "EXPLORE_COHORT_TOO_SMALL" && !String(error.message).includes('9'),
-  );
-  await assert.rejects(
-    () => SearchService.explore(viewerId, { category: 'same_department', interests: ['music', 'books'] }),
+    () => ExploreService.page(viewerId, { interests: ['music', 'books'], attributes: [{ key: 'hosteller', value: 'true' }] }),
     (error: any) => error.code === "EXPLORE_FILTER_COMBINATION_LIMIT",
   );
   await prisma.user.update({
     where: { id: rareIds[9] },
     data: { preferences: { interests: ["rare_interest"] } },
   });
-  const accepted = await SearchService.explore(viewerId, { interests: ["rare_interest"] });
-  assert.equal(accepted.category, 'for_you');
+  const accepted = await ExploreService.page(viewerId, { interests: ["rare_interest"] });
+  assert.equal(accepted.state, 'ok');
   assert.equal('cohortSize' in accepted, false);
-  assert.ok(accepted.cards.every((card) => (card.preferences as any)?.interests?.includes('rare_interest')));
+  assert.ok((accepted.cards as any[]).every((card) => (card.preferences as any)?.interests?.includes('rare_interest')));
   await prisma.user.updateMany({
     where: { id: { in: rareIds } },
     data: { preferences: { interests: ["music", "books"], internalToken: "PRIVATE_PREFERENCE" } },

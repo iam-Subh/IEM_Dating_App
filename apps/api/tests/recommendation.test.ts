@@ -36,6 +36,12 @@ const fixture = (id: string, category: string, show: string[]) =>
     college: "IEM",
     preferencesConfirmedAt: now,
   }) as User;
+/** Both verified at the same college: the pair `mutuallyEligible` needs besides the users. */
+const party = (userId: string) => ({
+  userId, verified: true, institutionId: "iem", groupCode: "IEM-UEM", city: "Kolkata",
+  campusConfirmed: true, campusId: null, anchor: null,
+});
+const eligible = (a: User, b: User) => mutuallyEligible(a, b, { a: party(a.id), b: party(b.id) }, now);
 test("eligibility is mutual for every category and nonempty preference subset", () => {
   const categories = ["man", "woman", "nonbinary"];
   const subsets = Array.from({ length: 7 }, (_, mask) =>
@@ -48,12 +54,12 @@ test("eligibility is mutual for every category and nonempty preference subset", 
           const a = fixture("a", x, sx),
             b = fixture("b", y, sy);
           assert.equal(
-            mutuallyEligible(a, b, now),
+            eligible(a, b),
             sx.includes(y) && sy.includes(x),
           );
           assert.equal(
-            mutuallyEligible(a, b, now),
-            mutuallyEligible(b, a, now),
+            eligible(a, b),
+            eligible(b, a),
           );
         }
 });
@@ -68,7 +74,7 @@ test("missing confirmation, inactive account, minor, self and incompatible mode 
     { id: "a" },
     { minAgePref: 25 },
   ]) {
-    assert.equal(mutuallyEligible(a, { ...b, ...patch }, now), false);
+    assert.equal(eligible(a, { ...b, ...patch } as User), false);
   }
 });
 test("age uses UTC calendar boundaries", () => {
@@ -599,4 +605,19 @@ test("experiment assignment retains the established key across ranking versions"
   const { createHash } = await import("node:crypto");
   assert.equal(DISCOVERY_EXPERIMENT_KEY,"reco-v2");
   assert.equal(assignment("viewer"), createHash("sha256").update("reco-v2:viewer").digest().readUInt32BE(0)/0x100000000*100);
+});
+
+test("the real-person check ranks a little ahead; a photo to fix a little behind; never past a clearly better match", () => {
+  const base = { visibleCount: 0, active: true, hasPhoto: true, incomingLike: false };
+  const real = { ...base, id: "real", score: 70, realPerson: true };
+  const plain = { ...base, id: "plain", score: 70 };
+  const issue = { ...base, id: "issue", score: 70, photoIssue: true };
+  // Same compatibility: checked first, the photo to fix last - in both policies.
+  for (const policy of [false, true]) {
+    assert.deepEqual(rankCandidates([issue, plain, real], "v", "s", policy), ["real", "plain", "issue"]);
+  }
+  // A trust signal, not a requirement: a clearly better match still comes first.
+  assert.deepEqual(rankCandidates([real, { ...plain, score: 80 }], "v", "s", false), ["plain", "real"]);
+  // And it never lifts an unverified profile over a verified one of the same score.
+  assert.deepEqual(rankCandidates([{ ...real, unverified: true }, plain], "v", "s", false), ["plain", "real"]);
 });

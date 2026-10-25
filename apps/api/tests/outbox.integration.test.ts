@@ -114,7 +114,7 @@ test('push delivery sends the Expo payload and removes an invalid device token',
   const deliveryEventId = randomUUID();
   try {
     await PushService.register(userB, token, 'android');
-    await PushService.send(userB, { title: 'Test title', body: 'Test body', data: { url: 'iemdating://chat/test' } }, deliveryEventId);
+    await PushService.send(userB, { title: 'Test title', body: 'Test body', data: { url: 'iemdating://chat/test' }, category: 'messages' }, deliveryEventId);
     assert.equal(received.length, 1);
     assert.equal(received[0].to, token);
     assert.equal(received[0].data.url, 'iemdating://chat/test');
