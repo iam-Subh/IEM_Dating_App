@@ -102,3 +102,65 @@ test('a late retry acknowledgement cannot confirm a timed-out attempt', async ()
   assert.equal((await h.queue.getOfflineQueue()).length, 2);
   assert.equal(h.timers.length, 1);
 });
+
+test('manual retry and reconnect share one send and notify both callers', async () => {
+  const h = harness();
+  await h.queue.addToOfflineQueue(message);
+  let acknowledge, emitted;
+  const ready = new Promise(resolve => { emitted = resolve; });
+  const payloads = [];
+  const confirmations = [];
+  const socket = { connected: true, emit: (_event, payload, callback) => { payloads.push(payload); acknowledge = callback; emitted(); } };
+  const first = h.queue.retryOfflineMessages(socket, 'match', () => confirmations.push('reconnect'));
+  await ready;
+  const second = h.queue.retryOfflineMessages(socket, 'match', () => confirmations.push('manual'));
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].clientMessageId, message.tempId);
+  acknowledge({ success: true, message: { id: 'server-one' } });
+  await Promise.all([first, second]);
+  assert.deepEqual(confirmations, ['reconnect', 'manual']);
+  assert.equal((await h.queue.getOfflineQueue()).length, 0);
+});
+
+test('send errors remain available after reload and a retry reuses the command', async () => {
+  const h = harness();
+  const original = { ...message, content: '❤️ **Hi** https://example.com', replyToId: 'original-message', metadata: { linkPreview: { url: 'https://example.com', title: 'Example' } } };
+  await h.queue.addToOfflineQueue(original);
+  const payloads = [];
+  let reported;
+  await h.queue.retryOfflineMessages({ connected: true, emit: (_event, body, callback) => { payloads.push(body); callback({ success: false, code: 'CHAT_UNAVAILABLE', error: 'Chat is temporarily unavailable' }); } }, 'match', undefined, (_message, status, error) => { if (status === 'queued') reported = error; });
+  const stored = (await h.queue.getOfflineQueue())[0];
+  assert.equal(stored.error, 'Chat is temporarily unavailable');
+  assert.equal(reported, stored.error);
+  await h.queue.retryQueuedMessage(message.tempId);
+  await h.queue.retryOfflineMessages({ connected: true, emit: (_event, body, callback) => { payloads.push(body); callback({ success: true, message: { id: 'server-one' } }); } }, 'match');
+  assert.equal(JSON.stringify(payloads[0]), JSON.stringify(payloads[1]));
+  assert.equal(payloads[1].replyToId, original.replyToId);
+  assert.equal(payloads[1].metadata.linkPreview.title, 'Example');
+  assert.equal((await h.queue.getOfflineQueue()).length, 0);
+});
+
+test('transient sends stop automatic retries after the attempt limit and retain the draft', async () => {
+  const h = harness();
+  await h.queue.addToOfflineQueue(message);
+  let sends = 0;
+  const socket = { connected: true, emit: (_event, _body, callback) => { sends++; callback({ success: false, code: 'CHAT_UNAVAILABLE', error: 'Service unavailable' }); } };
+  for (let i = 0; i < 7; i++) await h.queue.retryOfflineMessages(socket, 'match');
+  assert.equal(sends, 5);
+  assert.equal((await h.queue.getOfflineQueue())[0].status, 'failed');
+  assert.equal((await h.queue.getOfflineQueue())[0].content, message.content);
+  await h.queue.retryQueuedMessage(message.tempId);
+  await h.queue.retryOfflineMessages(socket, 'match');
+  assert.equal(sends, 6);
+});
+
+test('an acknowledgement without a server message keeps the message available for retry', async () => {
+  const h = harness();
+  await h.queue.addToOfflineQueue(message);
+  let confirmed = false;
+  const sent = await h.queue.retryOfflineMessages({ connected: true, emit: (_event, _body, callback) => callback({ success: true }) }, 'match', () => { confirmed = true; });
+  assert.equal(sent.length, 0);
+  assert.equal(confirmed, false);
+  assert.equal((await h.queue.getOfflineQueue())[0].tempId, message.tempId);
+  assert.equal((await h.queue.getOfflineQueue())[0].status, 'pending');
+});

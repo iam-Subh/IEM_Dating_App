@@ -9,6 +9,7 @@ function harness() {
   let auth = { user: { id: 'a' }, token: 'old-token' };
   const subscribers = new Set();
   const instances = [];
+  const appState = new Set();
   const module = { exports: {} };
   const store = { getState: () => ({ auth }), subscribe: (fn) => { subscribers.add(fn); return () => subscribers.delete(fn); } };
   const source = fs.readFileSync(path.join(__dirname, '../src/services/socket.ts'), 'utf8');
@@ -17,7 +18,9 @@ function harness() {
     module, exports: module.exports, process: { env: {} }, console, URL,
     require: (name) => {
       if (name === '../store') return { store };
-      if (name === 'react-native') return { Platform: { OS: 'android' } };
+      if (name === '../store/authSlice') return { updateUser: (payload) => ({ type: 'updateUser', payload }) };
+      if (name === './presenceHeartbeat') return { startPresenceHeartbeat() {}, stopPresenceHeartbeat() {} };
+      if (name === 'react-native') return { Platform: { OS: 'android' }, AppState: { addEventListener: (_event, fn) => { appState.add(fn); return { remove: () => appState.delete(fn) }; } } };
       if (name === 'socket.io-client') return { io: (_url, options) => {
         const socket = { options, connected: false, connects: 0, disconnects: 0, listeners: new Map(),
           on(event, fn) { this.listeners.set(event, fn); return this; },
@@ -29,7 +32,7 @@ function harness() {
       throw new Error(name);
     },
   });
-  return { service: module.exports, instances, update(next) { auth = next; [...subscribers].forEach((fn) => fn()); } };
+  return { service: module.exports, instances, appState, update(next) { auth = next; [...subscribers].forEach((fn) => fn()); } };
 }
 
 test('initialization preserves a reconnecting socket and its listeners', () => {
@@ -60,4 +63,22 @@ test('logout and account switch disconnect the previous socket', () => {
     assert.equal(h.service.getSocket(), null);
     assert.equal(original.disconnects, 1);
   }
+});
+
+test('back on screen, a dropped socket connects at once; screens hear about a new socket', () => {
+  const h = harness();
+  const seen = [];
+  h.service.onSocketChange((socket) => seen.push(socket));
+  h.service.initSocket();
+  const socket = h.service.getSocket();
+  assert.equal(socket.options.reconnectionAttempts, Infinity, 'it never gives up');
+  assert.deepEqual(seen, [socket]);
+  [...h.appState].forEach((fn) => fn('active'));
+  assert.equal(socket.connects, 1, 'reconnects when the app returns');
+  socket.connected = true;
+  [...h.appState].forEach((fn) => fn('active'));
+  assert.equal(socket.connects, 1, 'a live connection is left alone');
+  h.update({ user: null, token: null });
+  assert.equal(seen.at(-1), null, 'sign-out is announced');
+  assert.equal(h.appState.size, 0, 'no listener is left behind');
 });
