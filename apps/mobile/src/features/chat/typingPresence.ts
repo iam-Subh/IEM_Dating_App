@@ -9,7 +9,23 @@
  * injected clock.
  */
 
-export const INCOMING_TYPING_TIMEOUT_MS = 6000;
+// Telegram's typing status lasts 5 s unless the sender repeats it; ours is
+// repeated every TYPING_REFRESH_MS, so 5 s only runs out when they stopped
+// and the "stopped" signal was lost.
+export const INCOMING_TYPING_TIMEOUT_MS = 5000;
+/** A pause this long after the last keystroke is "stopped typing": short, so "typing…" leaves soon after they stop. */
+export const TYPING_IDLE_MS = 1200;
+/** How often the sender says "typing" again while typing goes on: well inside the expiry above. */
+export const TYPING_REFRESH_MS = 3000;
+
+/**
+ * Whether this keystroke should send "typing". The first one does, then one
+ * every TYPING_REFRESH_MS: a single signal per burst let a long message
+ * expire on the other phone while it was still being written.
+ */
+export function shouldSendTyping(typing: boolean, lastSentAt: number, now: number) {
+  return !typing || now - lastSentAt >= TYPING_REFRESH_MS;
+}
 
 type Timer = ReturnType<typeof setTimeout>;
 
