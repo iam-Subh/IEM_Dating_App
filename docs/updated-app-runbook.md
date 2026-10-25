@@ -287,6 +287,8 @@ npx expo start --dev-client
 
 The app uses a custom development client. Expo Go is not sufficient for the current audio and native modules.
 
+The floating tab bar also uses the native `react-native-liquid-glassmorphism` module. Rebuild the development client after pulling this change. Android 13 or later uses the AGSL refraction effect. iOS 26 uses the system Liquid Glass effect. Android 12 and iOS 15–25 use blur. Older supported Android versions use the frosted Expo blur fallback.
+
 If the phone cannot reach Metro on the local network, use:
 
 ```powershell
@@ -325,11 +327,25 @@ adb devices
 
 Accept the authorization prompt on the phone.
 
-For Android 11 or later wireless debugging, pair once:
+For Android 11 or later wireless debugging, pair once per PC. On the phone open
+Settings > Developer options > Wireless debugging > **Pair device with pairing
+code**, and leave that dialog on screen while you run:
+
+```powershell
+cd E:\IEM_Dating_App\apps\mobile
+npm run connect -- -Pair
+```
+
+That finds the pairing port over mDNS and prompts for the 6-digit code. To pair
+by hand instead, use the port shown in the dialog:
 
 ```powershell
 adb pair <phone-ip>:<pairing-port>
 ```
+
+The pairing port is only valid while the dialog is open, and it changes every
+time the dialog is reopened. `adb pair` against the connection port fails with
+`protocol fault (couldn't read status message)`.
 
 Connect each session:
 
@@ -337,6 +353,13 @@ Connect each session:
 cd E:\IEM_Dating_App\apps\mobile
 npm run connect
 ```
+
+`npm run connect` now also:
+
+- **Writes this PC's current Wi-Fi address into `apps/mobile/.env`** (`EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_SOCKET_URL`) whenever it has changed - new network, new DHCP lease. It prints the change; restart Metro with `--clear` afterwards. Commented ngrok lines are left alone.
+- **Remembers the phone's address** in `.phone-ip` (git-ignored), so a phone that got a new address is found without `-PhoneIP`.
+- **Stays running and reconnects by itself** when the phone drops (sleep, Wi-Fi blip, Wireless debugging toggled), reopening the Metro tunnel and re-checking the PC's address every 10 seconds. Ctrl+C stops it. `npm run connect -- -Once` connects and exits, as before.
+- With `-PhoneIP <ip>`, only that phone is tried - on a shared Wi-Fi the other advertised phones are other people's.
 
 If automatic discovery fails:
 
@@ -346,6 +369,13 @@ adb devices
 ```
 
 The pairing port and connection port are different. Use the port from the main Wireless debugging screen for `adb connect`.
+
+`npm run connect` distinguishes the two failure modes for you:
+
+| Message | Meaning | Fix |
+| --- | --- | --- |
+| `no listener - stale port` | Nothing is listening; the mDNS entry is stale | Toggle Wireless debugging off and on, re-run |
+| `port is open, but the phone rejected this PC` | Live port, but this PC is not paired | Run `npm run connect -- -Pair` |
 
 ## 11. Required application-flow check
 
@@ -560,7 +590,8 @@ Keep this section current. Remove an item only after its code, negative tests, f
 | Socket connection fails | Check `EXPO_PUBLIC_SOCKET_URL`, API reachability, session validity, and Redis. |
 | Physical phone cannot reach Metro | Put both devices on the same network or use `--tunnel`. |
 | ADB reports `unauthorized` | Accept the debugging prompt on the phone. Reconnect the device. |
-| ADB wireless connection fails | Use the current connection port, not the pairing port. Run `npm run connect` again. |
+| ADB wireless connection fails | Run `npm run connect` and read which of the two failures it reports. `no listener` means toggle Wireless debugging off and on. `rejected this PC` means run `npm run connect -- -Pair`. |
+| `adb pair` returns `protocol fault (couldn't read status message)` | You used the connection port. The pairing port is a different number, shown only inside the open "Pair device with pairing code" dialog. Use `npm run connect -- -Pair`. |
 | Native module is missing | Stop Metro. Build and install the SDK 57 development client with `npx expo run:android`. |
 | Patch installation fails | Confirm the exact dependency versions in `package-lock.json`. Do not skip the failed patch. Review and regenerate it for the new version. |
 | Prisma engine file is locked | Stop the known workspace API process. Run `npx prisma generate` again. |

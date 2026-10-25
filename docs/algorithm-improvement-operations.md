@@ -20,6 +20,27 @@
 
 The plan needed three corrections. The catalog contains 263 entries, not 264. Clubs already compare without case sensitivity, so no club backfill is required. Hangout fields permit multiple entries. Token matching remains excluded because common words can refer to different places.
 
+## Update 2026-10-08: the newer app rules in Discovery and Standouts
+
+Checked against the app as it is now - unverified accounts, "Who you see", the real-person check, pauses, reports - and measured with `npm run algorithm:lab` (400 students, 22 checks).
+
+**Already right, now measured by the lab**
+- Gender and "show me", both ways, in the deck and in Standouts (`eligibleSql`, `mutuallyEligible`).
+- Age ranges both ways, with the flexible years.
+- "Who you see": my campus, all my college's campuses, both colleges, or "People near me" (radius to a person's cell, or to a college-mode person's campus).
+- Unverified: own campus only (college choosers), a few places lower in ranking, never in Standouts as a pick, campus-only Standouts as viewers.
+- Paused accounts out of everyone's lists.
+
+**Added**
+| Rule | Where |
+|---|---|
+| Passed the real-person check: +3 points in the deck ranking (never past a clearly better match), +8 of 100 in Standouts (`standouts_real_person_boost`) | `ranking-policy.ts`, `discovery-ranking.service.ts`, `standouts.service.ts`, `standouts-v3.service.ts` |
+| A photo or video that now fails the real-person check: -4 in the deck, kept out of Standouts until fixed | same, and `readySql` |
+| An open "Under 18" report: out of the deck, Explore, Standouts, Likes You, the map and search until the team has reviewed it (`UNDER_AGE_HOLD_SQL`) | `eligibility.service.ts`, `search-people.service.ts` |
+| Standouts night run skips paused viewers | `standouts-v3.service.ts` |
+
+**Lab result (seed 1):** all 22 checks OK - mutual visibility 5314/5314, 0 wrong gender or age cards of 5550, 0 cards outside a "near me" radius, 0 hidden people shown, real-person checked earlier in 62.5% of mixed decks and 46% of Standouts picks vs 41% of verified students, own campus first in 100% of mixed decks, Gini 0.25, deck p95 454 ms, Standouts 88% full.
+
 ## Interest backfill
 
 Run from `apps/api`. Load the intended database address into `DATABASE_URL` through the normal environment configuration. The command does not load an `.env` file itself.
