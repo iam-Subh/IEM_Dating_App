@@ -111,4 +111,37 @@ export class EmailService {
       throw new Error('Failed to send verification email. Please try again.');
     }
   }
+
+  /** The confirmation link for deleting an account from the website (public-pages.routes.ts). */
+  static async sendAccountDeletionLink(to: string, link: string): Promise<void> {
+    const from = process.env.SMTP_FROM || 'IEM Connect <noreply@iemconnect.app>';
+    if (!hasSmtpCredentials) {
+      // Local development without mail: the link goes to the log instead.
+      logger.info(`[DELETE] confirmation link (no SMTP configured): ${link}`);
+      return;
+    }
+    const html = `<!DOCTYPE html><html><body style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#121212;margin:0;padding:48px 20px">
+<div style="max-width:520px;margin:0 auto;background:#1e1e1e;border-radius:16px;border:1px solid #333;padding:36px">
+<h1 style="color:#fff;font-size:22px;margin:0 0 12px">Delete your IEM Connect account?</h1>
+<p style="color:#a1a1aa;font-size:15px;line-height:1.6;margin:0 0 24px">We got a request to delete the account that uses this email. If it was you, confirm below. The link works for 60 minutes.</p>
+<a href="${link}" style="display:inline-block;background:#f3c1ca;color:#331c23;font-weight:700;text-decoration:none;padding:13px 22px;border-radius:24px">Confirm deletion</a>
+<p style="color:#71717a;font-size:13px;line-height:1.6;margin:24px 0 0">If you didn't ask for this, ignore this email - nothing changes.</p>
+</div></body></html>`;
+    await transporter.sendMail({
+      from, to,
+      subject: 'Confirm deleting your IEM Connect account',
+      html,
+      text: `We got a request to delete your IEM Connect account. To confirm, open this link within 60 minutes:
+${link}
+
+If you didn't ask for this, ignore this email.`,
+    });
+  }
+
+  /** A short plain message from the team (an appeal decision). */
+  static async sendTeamMessage(to: string, subject: string, text: string): Promise<void> {
+    const from = process.env.SMTP_FROM || 'IEM Connect <noreply@iemconnect.app>';
+    if (!hasSmtpCredentials) { logger.info(`[EMAIL] (no SMTP configured) to ${to}: ${subject}`); return; }
+    await transporter.sendMail({ from, to, subject, text });
+  }
 }

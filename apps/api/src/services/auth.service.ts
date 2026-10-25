@@ -1,3 +1,6 @@
+import { IdentityBanService } from './identity-ban.service';
+import { standingError } from './account-standing';
+import { liftExpiredSuspension } from './suspension';
 import { prisma } from '../utils/prisma';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
@@ -5,18 +8,64 @@ import { generateTokens } from '../utils/jwt';
 import { OnboardingService } from './onboarding.service';
 import { verifyRefreshToken } from '../utils/jwt';
 import { HttpError } from '../utils/httpError';
-import { disconnectUserSockets } from '../socket';
+import { disconnectSessionSockets, disconnectUserSockets } from '../socket';
+import { maskIp } from './session-device.service';
+import { SignInNoticeService } from './sign-in-notice.service';
 import { OTPService } from './otp.service';
 import { EmailService } from './email.service';
 
-const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
+export const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 
 
 export class AuthService {
+  /**
+   * The account an email signs in to (GOOGLE_SIGNUP_PLAN.md 1.2): its main
+   * email (a college email, or the Gmail of a Google sign-up), or the
+   * verified college email of a Google account that verified later.
+   */
+  static async findAccountByEmail(rawEmail: string) {
+    const email = rawEmail.trim().toLowerCase();
+    const byEmail = await prisma.user.findUnique({ where: { email } });
+    if (byEmail) return byEmail;
+    const membership = await prisma.studentMembership.findFirst({
+      where: { institutionalEmail: email, status: 'verified', verifiedAt: { not: null } },
+      select: { userId: true },
+    });
+    return membership ? prisma.user.findUnique({ where: { id: membership.userId } }) : null;
+  }
+
+  /** Settings > Account > Add a password, for an account made with Google (1.2). */
+  static async setPassword(userId: string, password: string) {
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { passwordHash: true } });
+    if (user.passwordHash) throw new HttpError(409, 'This account already has a password.', 'PASSWORD_ALREADY_SET');
+    await prisma.user.update({ where: { id: userId }, data: { passwordHash: await bcrypt.hash(password, 10) } });
+  }
+
+  /**
+   * Account > Change password: the current one first. Every other device is
+   * signed out (whoever knew the old password); this one stays signed in.
+   */
+  static async changePassword(userId: string, currentPassword: string, nextPassword: string, currentJti: string) {
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { passwordHash: true } });
+    if (!user.passwordHash) throw new HttpError(409, 'This account has no password yet. Add one instead.', 'NO_PASSWORD');
+    if (!await bcrypt.compare(currentPassword, user.passwordHash)) {
+      throw new HttpError(400, 'Your current password is not right.', 'WRONG_PASSWORD');
+    }
+    if (await bcrypt.compare(nextPassword, user.passwordHash)) {
+      throw new HttpError(400, 'Choose a password you have not used here.', 'SAME_PASSWORD');
+    }
+    await prisma.user.update({ where: { id: userId }, data: { passwordHash: await bcrypt.hash(nextPassword, 10) } });
+    return this.revokeOtherSessions(userId, currentJti);
+  }
+
   static async startRecovery(rawEmail: string) {
     const email = rawEmail.trim().toLowerCase();
+    const user = await this.findAccountByEmail(email);
+    // A Google account without a password has nothing to recover: it signs in with Google (1.2).
+    if (user && !user.passwordHash && user.googleSub) {
+      throw new HttpError(409, 'This account signs in with Google.', 'USE_GOOGLE_SIGN_IN');
+    }
     const challenge = await OTPService.issue(email, 'password_recovery');
-    const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
     if (user) {
       try { await EmailService.sendOTP(email, challenge.code); }
       catch { await OTPService.cancel(challenge.challengeId); }
@@ -28,7 +77,7 @@ export class AuthService {
     const email = data.email.trim().toLowerCase();
     const verified = await OTPService.verify(email, 'password_recovery', data.challengeId, data.code);
     if (!verified.valid) throw new HttpError(400, verified.error || 'Recovery code is invalid', 'INVALID_OTP');
-    const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    const existing = await this.findAccountByEmail(email);
     if (!existing) throw new HttpError(400, 'Recovery request is invalid or expired', 'INVALID_RECOVERY');
     const passwordHash = await bcrypt.hash(data.newPassword, 10);
     await prisma.$transaction([
@@ -38,24 +87,46 @@ export class AuthService {
     disconnectUserSockets(existing.id);
   }
 
-  static async register(data: any) {
+  /**
+   * Refuses sign-up for an email that already has an account, and says how
+   * that account signs in, so the app can offer the right way in.
+   */
+  static async assertEmailFree(rawEmail: string) {
+    const email = rawEmail.trim().toLowerCase();
+    const user = await prisma.user.findUnique({ where: { email }, select: { googleSub: true, googleLinkedAt: true, createdAt: true } });
+    if (!user) return;
+    const madeWithGoogle = !!(user.googleSub && user.googleLinkedAt && Math.abs(user.googleLinkedAt.getTime() - user.createdAt.getTime()) < 60_000);
+    throw new HttpError(409,
+      madeWithGoogle ? 'This email already has an account. Sign in with Google.' : 'This email already has an account. Sign in instead.',
+      'EMAIL_ALREADY_REGISTERED', { email, signIn: madeWithGoogle ? 'google' : 'password' });
+  }
+
+  static async register(data: any, androidId: string | null = null) {
     const email = data.email.trim().toLowerCase();
+    // A banned person's email or phone can't sign up again (GOOGLE_SIGNUP_PLAN.md 6.1).
+    await IdentityBanService.assertNotBanned({ emails: [email], androidId });
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
       throw new HttpError(409, 'Email already registered', 'EMAIL_ALREADY_REGISTERED');
     }
 
     const domain = email.split('@')[1];
-    const institution = await prisma.institution.findFirst({
+    const matching = await prisma.institution.findMany({
       where: {
         isActive: true,
         allowedDomains: { has: domain },
         ...(data.institutionCode ? { code: data.institutionCode } : {}),
       },
     });
-    if (!institution) {
+    if (!matching.length) {
       throw new HttpError(400, 'College email domain is not supported', 'INSTITUTION_NOT_SUPPORTED');
     }
+    // A domain shared by several institutions (uem.edu.in: UEM Kolkata and
+    // UEM Jaipur) cannot say which one this student attends. Rather than take
+    // whichever the database returns first, create the account without a
+    // membership: onboarding then routes to student verification, where the
+    // student chooses and the campus is checked (LOCATION_SPEC.md 8.2).
+    const institution = matching.length === 1 ? matching[0] : null;
     await OTPService.consumeProof(email, 'registration', data.verificationToken);
     const hashedPassword = await bcrypt.hash(data.password, 10);
     const verifiedAt = new Date();
@@ -69,23 +140,26 @@ export class AuthService {
           passwordHash: hashedPassword,
           department: data.department,
           graduationYear: data.graduationYear,
-          college: institution.name,
+          college: institution?.name ?? null,
+          signupAndroidId: androidId,
           emailVerifiedAt: verifiedAt,
           isVerified: false,
           lastActiveAt: verifiedAt,
         },
       });
       await tx.userScore.create({ data: { userId: created.id } });
-      await tx.studentMembership.create({
-        data: {
-          userId: created.id,
-          institutionId: institution.id,
-          institutionalEmail: email,
-          status: 'verified',
-          verifiedAt,
-          expiresAt,
-        },
-      });
+      if (institution) {
+        await tx.studentMembership.create({
+          data: {
+            userId: created.id,
+            institutionId: institution.id,
+            institutionalEmail: email,
+            status: 'verified',
+            verifiedAt,
+            expiresAt,
+          },
+        });
+      }
       return created;
     }); } catch (error: any) {
       if (error?.code === 'P2002') throw new HttpError(409, 'Email already registered', 'EMAIL_ALREADY_REGISTERED');
@@ -98,20 +172,25 @@ export class AuthService {
   }
 
   static async login(data: any) {
-    const email = data.email.trim().toLowerCase();
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user || !['active', 'deletion_pending'].includes(user.accountStatus)) {
+    const found = await this.findAccountByEmail(data.email);
+    const user = found ? await liftExpiredSuspension(found) : null;
+    if (!user || user.accountStatus === 'deleted') {
       throw new HttpError(401, 'Invalid credentials', 'INVALID_CREDENTIALS');
     }
 
     if (!user.passwordHash) {
-      // User registered via Phone OTP and hasn't set up an email password yet
-      throw new HttpError(401, 'Invalid credentials', 'INVALID_CREDENTIALS');
+      if (!['active', 'deletion_pending'].includes(user.accountStatus)) throw new HttpError(401, 'Invalid credentials', 'INVALID_CREDENTIALS');
+      // A Google account without a password signs in with Google (1.2).
+      throw new HttpError(401, 'This account signs in with Google.', user.googleSub ? 'USE_GOOGLE_SIGN_IN' : 'INVALID_CREDENTIALS');
     }
 
     const isValid = await bcrypt.compare(data.password, user.passwordHash);
     if (!isValid) {
       throw new HttpError(401, 'Invalid credentials', 'INVALID_CREDENTIALS');
+    }
+    // The right password, but the account can't sign in: say why, and how to appeal.
+    if (!['active', 'deletion_pending'].includes(user.accountStatus)) {
+      throw standingError(user) ?? new HttpError(401, 'Invalid credentials', 'INVALID_CREDENTIALS');
     }
 
     const jti = randomUUID();
@@ -128,82 +207,13 @@ export class AuthService {
         deviceInfo: data.deviceInfo || {}
       }
     });
+    void SignInNoticeService.afterSignIn(user.id, familyId, data.deviceInfo);
 
     const { passwordHash, ...userWithoutPassword } = user;
     return {
       user: userWithoutPassword,
       accessToken,
       refreshToken,
-      onboarding: await OnboardingService.getStatus(user.id),
-    };
-  }
-
-  static async findOrCreateByPhone(phone: string) {
-    let user;
-    try {
-      user = await prisma.user.findUnique({ where: { phone } });
-    } catch (e) {
-      throw e;
-    }
-
-    if (!user) {
-      try {
-        // Auto-create user with phone — they can add email/details later
-        user = await prisma.$transaction(async (tx) => {
-          const created = await tx.user.create({
-            data: {
-              phone,
-              name: `User_${phone.slice(-4)}`,
-              passwordHash: '',
-              lastActiveAt: new Date(),
-              phoneVerifiedAt: new Date(),
-              isVerified: false,
-            },
-          });
-          await tx.userScore.create({ data: { userId: created.id } });
-          return created;
-        });
-      } catch (e) {
-        throw e;
-      }
-    } else {
-      if (!['active', 'deletion_pending'].includes(user.accountStatus)) throw new HttpError(403, 'Account is unavailable', 'ACCOUNT_UNAVAILABLE');
-      if (!user.phoneVerifiedAt) {
-        user = await prisma.user.update({
-          where: { id: user.id },
-          data: { phoneVerifiedAt: new Date() },
-        });
-      }
-    }
-
-    const jti = randomUUID();
-    const familyId = randomUUID();
-    
-    let tokens;
-    try {
-      tokens = generateTokens(user.id, user.email || user.phone || '', jti, user.role, user.sessionVersion);
-    } catch (e) {
-      throw e;
-    }
-
-    try {
-      await prisma.userSession.create({
-        data: {
-          userId: user.id,
-          tokenJti: jti,
-          familyId,
-          expiresAt: new Date(Date.now() + SESSION_LIFETIME_MS),
-          deviceInfo: {},
-        },
-      });
-    } catch (e) {
-      throw e;
-    }
-
-    const { passwordHash, ...userWithoutPassword } = user;
-    return {
-      user: userWithoutPassword,
-      ...tokens,
       onboarding: await OnboardingService.getStatus(user.id),
     };
   }
@@ -270,7 +280,7 @@ export class AuthService {
     }
     const tokens = generateTokens(
       result.user.id,
-      result.user.email || result.user.phone || '',
+      result.user.email ?? '',
       newJti,
       result.user.role,
       result.user.sessionVersion,
@@ -300,20 +310,60 @@ export class AuthService {
     disconnectUserSockets(userId);
   }
 
+  /**
+   * One row per signed-in device. A renewal replaces a session row, so the
+   * device's sign-in time is the first row of its family, and "last active"
+   * is when it last made a request (`touchSession`).
+   */
   static async listSessions(userId: string, currentJti: string) {
     const sessions = await prisma.userSession.findMany({
       where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, tokenJti: true, deviceInfo: true, createdAt: true, lastUsedAt: true, expiresAt: true },
+      select: { id: true, tokenJti: true, familyId: true, deviceInfo: true, createdAt: true, lastUsedAt: true, expiresAt: true },
     });
-    return sessions.map(({ tokenJti, ...session }) => ({ ...session, current: tokenJti === currentJti }));
+    const firsts = sessions.length
+      ? await prisma.userSession.groupBy({
+        by: ['familyId'],
+        where: { familyId: { in: sessions.map((session) => session.familyId) } },
+        _min: { createdAt: true },
+      })
+      : [];
+    const signedInOf = new Map(firsts.map((row) => [row.familyId, row._min.createdAt]));
+    return sessions.map(({ tokenJti, familyId, deviceInfo, ...session }) => {
+      const info = (deviceInfo ?? {}) as Record<string, string | undefined>;
+      const { ip, ...device } = info;
+      return {
+        ...session,
+        deviceInfo: device,
+        ip: maskIp(ip),
+        signedInAt: (signedInOf.get(familyId) ?? session.createdAt).toISOString(),
+        lastActiveAt: (session.lastUsedAt ?? session.createdAt).toISOString(),
+        current: tokenJti === currentJti,
+      };
+    });
   }
 
   static async revokeSession(userId: string, sessionId: string, currentJti: string) {
     const session = await prisma.userSession.findFirst({ where: { id: sessionId, userId, revokedAt: null }, select: { id: true, tokenJti: true } });
     if (!session) throw new HttpError(404, 'Session is unavailable', 'SESSION_UNAVAILABLE');
     await prisma.userSession.update({ where: { id: session.id }, data: { revokedAt: new Date(), revokeReason: 'USER_REVOKED' } });
-    if (session.tokenJti === currentJti) disconnectUserSockets(userId);
+    // That device loses access on its next request; its live connection goes now.
+    await disconnectSessionSockets(userId, [session.tokenJti]);
     return { id: session.id, current: session.tokenJti === currentJti };
+  }
+
+  /** Every device but this one. */
+  static async revokeOtherSessions(userId: string, currentJti: string) {
+    const others = await prisma.userSession.findMany({
+      where: { userId, revokedAt: null, tokenJti: { not: currentJti } },
+      select: { tokenJti: true },
+    });
+    if (!others.length) return { revoked: 0 };
+    await prisma.userSession.updateMany({
+      where: { userId, revokedAt: null, tokenJti: { in: others.map((row) => row.tokenJti) } },
+      data: { revokedAt: new Date(), revokeReason: 'USER_REVOKED_OTHERS' },
+    });
+    await disconnectSessionSockets(userId, others.map((row) => row.tokenJti));
+    return { revoked: others.length };
   }
 }

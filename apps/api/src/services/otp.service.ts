@@ -7,7 +7,7 @@ const PROOF_TTL_SECONDS = 600;
 const RESEND_SECONDS = 60;
 const MAX_ATTEMPTS = 5;
 
-export type OTPPurpose = 'registration' | 'phone_login' | 'student_membership' | 'password_recovery';
+export type OTPPurpose = 'registration' | 'student_membership' | 'password_recovery';
 
 function secret(): string {
   const value = process.env.OTP_HMAC_SECRET;

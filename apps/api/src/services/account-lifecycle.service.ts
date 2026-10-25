@@ -1,9 +1,12 @@
+import { objectKeyFromUrl } from './profile-media-processing.service';
+import { abortUpload } from './s3-multipart';
 import { DeleteObjectsCommand } from '@aws-sdk/client-s3';
 import { randomUUID } from 'crypto';
 import { s3Client } from '../middlewares/upload.middleware';
 import { prisma } from '../utils/prisma';
 import { HttpError } from '../utils/httpError';
 import { Prisma } from '@prisma/client';
+import { privateMediaBucket, publicMediaBucket } from '../config/storage';
 
 const DELETION_DELAY_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -31,10 +34,17 @@ export class AccountLifecycleService {
         },
       });
       const { passwordHash: _passwordHash, ...safeUser } = user;
-      const [follows, storyPreferences, stories, storyViews, reactions, messageVisibility, receipts, chatParticipants, accountEvents, deviceCursors] = await Promise.all([
+      // Fetched first: the person's own Story ids, so insight totals - which
+      // have no owner column of their own - can be looked up by them.
+      const stories = await prisma.story.findMany({ where: { ownerId: userId } });
+      const [follows, storyPreferences, storyCloseFriends, storyHiddenFrom, storyInsights, storyViews, reactions, messageVisibility, receipts, chatParticipants, accountEvents, deviceCursors] = await Promise.all([
         prisma.follow.findMany({ where: { OR: [{ followerId: userId }, { followeeId: userId }] } }),
         prisma.storyPreference.findMany({ where: { OR: [{ viewerId: userId }, { authorId: userId }] } }),
-        prisma.story.findMany({ where: { ownerId: userId } }),
+        // Only the person's own lists: whose lists they are on stays private to those owners.
+        prisma.storyCloseFriend.findMany({ where: { ownerId: userId } }),
+        prisma.storyHiddenFrom.findMany({ where: { ownerId: userId } }),
+        // Insight totals for the person's own Stories only - nobody else's numbers.
+        stories.length ? prisma.storyInsight.findMany({ where: { storyId: { in: stories.map((story) => story.id) } } }) : Promise.resolve([]),
         prisma.storyView.findMany({ where: { viewerId: userId } }),
         prisma.messageReaction.findMany({ where: { userId } }),
         prisma.messageVisibility.findMany({ where: { userId } }),
@@ -47,7 +57,7 @@ export class AccountLifecycleService {
         where: { id: request.id },
         data: {
           status: 'completed',
-          result: jsonValue({ ...safeUser, follows, storyPreferences, stories, storyViews, reactions, messageVisibility, receipts, chatParticipants, accountEvents, deviceCursors }),
+          result: jsonValue({ ...safeUser, follows, storyPreferences, storyCloseFriends, storyHiddenFrom, stories, storyInsights, storyViews, reactions, messageVisibility, receipts, chatParticipants, accountEvents, deviceCursors }),
           completedAt: new Date(),
           expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         },
@@ -68,21 +78,57 @@ export class AccountLifecycleService {
     return request;
   }
 
-  static async requestDeletion(userId: string) {
+  /**
+   * Leaves discovery now and erases everything in 30 days. Every device is
+   * signed out and stops getting pushes at once; signing in again within the
+   * 30 days offers to keep the account. The reason, if given, is kept with the
+   * request until the erase - for us to learn from, never shown to anyone.
+   */
+  static async requestDeletion(userId: string, details: { reason?: string | null; note?: string | null } = {}) {
     const existing = await prisma.accountDataRequest.findFirst({
       where: { userId, type: 'deletion', status: 'pending' },
       orderBy: { createdAt: 'desc' },
     });
-    if (existing) return existing;
-    return prisma.$transaction(async (tx) => {
-      const request = await tx.accountDataRequest.create({
-        data: { userId, type: 'deletion', scheduledFor: new Date(Date.now() + DELETION_DELAY_MS) },
+    if (existing) return { id: existing.id, scheduledFor: existing.scheduledFor };
+    const reason = details.reason || details.note ? { reason: details.reason ?? null, note: details.note?.trim().slice(0, 500) || null } : undefined;
+    const request = await prisma.$transaction(async (tx) => {
+      const created = await tx.accountDataRequest.create({
+        data: { userId, type: 'deletion', scheduledFor: new Date(Date.now() + DELETION_DELAY_MS), ...(reason ? { result: reason } : {}) },
       });
       await tx.user.update({
         where: { id: userId },
-        data: { accountStatus: 'deletion_pending', eligibilityVersion: { increment: 1 } },
+        data: { accountStatus: 'deletion_pending', sessionVersion: { increment: 1 }, eligibilityVersion: { increment: 1 } },
       });
-      return request;
+      await tx.userSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date(), revokeReason: 'ACCOUNT_DELETION' } });
+      await tx.deviceToken.deleteMany({ where: { userId } });
+      return created;
+    });
+    return { id: request.id, scheduledFor: request.scheduledFor };
+  }
+
+  /** The pending deletion, for the "your account will be deleted" screen after signing in. */
+  static async pendingDeletion(userId: string) {
+    const request = await prisma.accountDataRequest.findFirst({
+      where: { userId, type: 'deletion', status: 'pending' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, scheduledFor: true },
+    });
+    return request ? { id: request.id, scheduledFor: request.scheduledFor } : null;
+  }
+
+  /**
+   * Deletes at once - the empty account left behind when someone switches to
+   * the account their college email already has (GOOGLE_SIGNUP_PLAN.md 1.4).
+   * Signed out now; the data goes with the next deletion run, within a minute.
+   */
+  static async deleteNow(userId: string) {
+    await prisma.$transaction(async (tx) => {
+      await tx.accountDataRequest.create({ data: { userId, type: 'deletion', scheduledFor: new Date() } });
+      await tx.user.update({
+        where: { id: userId },
+        data: { accountStatus: 'deletion_pending', sessionVersion: { increment: 1 }, eligibilityVersion: { increment: 1 } },
+      });
+      await tx.userSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date(), revokeReason: 'ACCOUNT_SWITCHED' } });
     });
   }
 
@@ -140,22 +186,42 @@ export class AccountLifecycleService {
   }
 
   private static async eraseAccount(userId: string) {
+    // Renditions written by the backfill have no asset row; their URLs are on the profile.
+    const legacyRenditions = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { videoPosterUrl: true, videoPlaybackUrl: true, photos: { select: { cardUrl: true, thumbUrl: true } } },
+    });
     const [profileAssets, chatAssets, storyAssets, ownedStories, devices] = await Promise.all([
-      prisma.profileMediaAsset.findMany({ where: { ownerId: userId }, select: { objectKey: true, previewObjectKey: true } }),
+      prisma.profileMediaAsset.findMany({ where: { ownerId: userId }, select: { objectKey: true, previewObjectKey: true, cardObjectKey: true, thumbObjectKey: true, posterObjectKey: true, playbackObjectKey: true } }),
       prisma.chatMediaAsset.findMany({ where: { ownerId: userId }, select: { objectKey: true, thumbnailObjectKey: true } }),
-      prisma.storyMediaAsset.findMany({ where: { ownerId: userId }, select: { id: true, objectKey: true, thumbnailObjectKey: true } }),
+      prisma.storyMediaAsset.findMany({ where: { ownerId: userId }, select: { id: true, objectKey: true, thumbnailObjectKey: true, uploadId: true } }),
       prisma.story.findMany({ where: { ownerId: userId }, select: { id: true } }),
       prisma.deviceToken.findMany({ where: { userId }, select: { id: true } }),
     ]);
+    const ownedStoryIds = ownedStories.map((item) => item.id);
+    const ownedStickerIds = (await prisma.storySticker.findMany({ where: { storyId: { in: ownedStoryIds } }, select: { id: true } })).map((item) => item.id);
+    // Story posts still uploading in the background would otherwise leave parts in S3.
+    if (privateMediaBucket()) {
+      await Promise.all(storyAssets.filter((asset) => asset.uploadId).map((asset) => (
+        abortUpload(privateMediaBucket()!, asset.objectKey, asset.uploadId!).catch(() => undefined)
+      )));
+    }
     const publicKeys = [...new Set([
-      ...profileAssets.flatMap((asset) => [asset.objectKey, asset.previewObjectKey]),
+      ...profileAssets.flatMap((asset) => [
+        asset.objectKey, asset.previewObjectKey, asset.cardObjectKey, asset.thumbObjectKey, asset.posterObjectKey, asset.playbackObjectKey,
+      ]),
+      ...[
+        legacyRenditions?.videoPosterUrl,
+        legacyRenditions?.videoPlaybackUrl,
+        ...(legacyRenditions?.photos ?? []).flatMap((photo) => [photo.cardUrl, photo.thumbUrl]),
+      ].map((url) => (url ? objectKeyFromUrl(url) : null)),
     ].filter((key): key is string => !!key))];
     const privateKeys = [...new Set([
       ...chatAssets.flatMap((asset) => [asset.objectKey, asset.thumbnailObjectKey]),
       ...storyAssets.flatMap((asset) => [asset.objectKey, asset.thumbnailObjectKey]),
     ].filter((key): key is string => !!key))];
-    const bucket = process.env.AWS_S3_BUCKET_NAME;
-    const privateBucket = process.env.AWS_PRIVATE_MEDIA_BUCKET;
+    const bucket = publicMediaBucket();
+    const privateBucket = privateMediaBucket();
     if (publicKeys.length && !bucket) throw new Error('AWS_S3_BUCKET_NAME is required to delete profile media');
     if (privateKeys.length && !privateBucket) throw new Error('AWS_PRIVATE_MEDIA_BUCKET is required to delete private media');
     for (let offset = 0; offset < publicKeys.length; offset += 1000) {
@@ -174,6 +240,11 @@ export class AccountLifecycleService {
         tx.profileMediaAsset.deleteMany({ where: { ownerId: userId } }),
         tx.chatMediaAsset.deleteMany({ where: { ownerId: userId } }),
         tx.studentMembership.deleteMany({ where: { userId } }),
+        // Real-person check: the face key and every result (PHOTO_VERIFICATION_PLAN.md 10).
+        tx.faceKey.deleteMany({ where: { userId } }),
+        tx.faceMediaCheck.deleteMany({ where: { userId } }),
+        tx.faceVerification.deleteMany({ where: { userId } }),
+        tx.faceChallenge.deleteMany({ where: { userId } }),
         tx.userSession.deleteMany({ where: { userId } }),
         tx.userScore.deleteMany({ where: { userId } }),
         tx.deviceToken.deleteMany({ where: { userId } }),
@@ -185,9 +256,24 @@ export class AccountLifecycleService {
         tx.swipe.deleteMany({ where: { OR: [{ swiperId: userId }, { targetId: userId }] } }),
         tx.userBlock.deleteMany({ where: { OR: [{ blockerId: userId }, { blockedId: userId }] } }),
         tx.storyView.deleteMany({ where: { OR: [{ viewerId: userId }, { storyId: { in: ownedStories.map((item) => item.id) } }] } }),
+        tx.storyLike.deleteMany({ where: { OR: [{ viewerId: userId }, { storyId: { in: ownedStories.map((item) => item.id) } }] } }),
+        tx.storyStickerResponse.deleteMany({ where: { OR: [{ viewerId: userId }, { storyId: { in: ownedStoryIds } }] } }),
+        tx.storyQuestionReply.deleteMany({ where: { OR: [{ viewerId: userId }, { storyId: { in: ownedStoryIds } }] } }),
+        tx.storyLinkTap.deleteMany({ where: { OR: [{ viewerId: userId }, { storyId: { in: ownedStoryIds } }] } }),
+        tx.storyRevealUnlock.deleteMany({ where: { OR: [{ viewerId: userId }, { storyId: { in: ownedStoryIds } }] } }),
+        tx.storyAddYoursEntry.deleteMany({ where: { OR: [{ ownerId: userId }, { storyId: { in: ownedStoryIds } }] } }),
+        tx.storyAddYoursThread.deleteMany({ where: { creatorId: userId } }),
+        tx.storyCountdownSubscription.deleteMany({ where: { OR: [{ userId }, { stickerId: { in: ownedStickerIds } }] } }),
+        tx.storyMention.deleteMany({ where: { OR: [{ mentionedUserId: userId }, { storyId: { in: ownedStoryIds } }] } }),
+        tx.storySticker.deleteMany({ where: { storyId: { in: ownedStoryIds } } }),
+        tx.storyInsight.deleteMany({ where: { storyId: { in: ownedStoryIds } } }),
+        tx.storyBatchItem.deleteMany({ where: { ownerId: userId } }),
+        tx.storyBatch.deleteMany({ where: { ownerId: userId } }),
         tx.story.deleteMany({ where: { ownerId: userId } }),
         tx.storyMediaAsset.deleteMany({ where: { ownerId: userId } }),
         tx.storyPreference.deleteMany({ where: { OR: [{ viewerId: userId }, { authorId: userId }] } }),
+        tx.storyCloseFriend.deleteMany({ where: { OR: [{ ownerId: userId }, { friendId: userId }] } }),
+        tx.storyHiddenFrom.deleteMany({ where: { OR: [{ ownerId: userId }, { hiddenUserId: userId }] } }),
         tx.follow.deleteMany({ where: { OR: [{ followerId: userId }, { followeeId: userId }] } }),
         tx.messageReaction.deleteMany({ where: { userId } }),
         tx.messageVisibility.deleteMany({ where: { userId } }),
@@ -199,7 +285,11 @@ export class AccountLifecycleService {
         where: { id: userId },
         data: {
           email: null,
-          phone: null,
+          googleSub: null,
+          googleEmail: null,
+          googleLinkedAt: null,
+          claimedInstitutionId: null,
+          verifyLaterAt: null,
           name: 'Deleted User',
           passwordHash: randomUUID(),
           accountStatus: 'deleted',
@@ -225,10 +315,11 @@ export class AccountLifecycleService {
           distancePreference: null,
           preferences: Prisma.JsonNull,
           emailVerifiedAt: null,
-          phoneVerifiedAt: null,
           avatarUrl: null,
           profileVideoUrl: null,
           videoPreviewUrl: null,
+          videoPosterUrl: null,
+          videoPlaybackUrl: null,
           locationArea: null,
           latitude: null,
           longitude: null,

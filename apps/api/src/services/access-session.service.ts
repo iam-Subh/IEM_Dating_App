@@ -1,27 +1,41 @@
 import { prisma } from '../utils/prisma';
 import { verifyAccessToken } from '../utils/jwt';
 
+/**
+ * The sign-in itself is not good: a bad or expired token, a revoked session,
+ * an account that can't sign in. Anything else thrown while checking - the
+ * database restarting, a dropped connection - is the server's problem, and
+ * must not look like this (auth.middleware.ts answers it with a 503).
+ */
+export class AuthRejected extends Error {}
+
 export class AccessSessionService {
   static async authenticate(token: string) {
-    const decoded = verifyAccessToken(token);
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.sub },
-      select: { id: true, email: true, role: true, accountStatus: true, sessionVersion: true },
-    });
+    let decoded: ReturnType<typeof verifyAccessToken>;
+    try { decoded = verifyAccessToken(token); }
+    catch (error) { throw new AuthRejected((error as Error).message); }
+    // Every request waits on this. Both reads need only the token, so they
+    // share one round trip to the database instead of two.
+    const [user, session] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: decoded.sub },
+        select: { id: true, email: true, role: true, accountStatus: true, sessionVersion: true },
+      }),
+      prisma.userSession.findFirst({
+        where: {
+          userId: decoded.sub,
+          tokenJti: decoded.jti,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        select: { id: true },
+      }),
+    ]);
     if (!user || !['active', 'deletion_pending'].includes(user.accountStatus) || user.sessionVersion !== decoded.sv) {
-      throw new Error('Account or session is unavailable');
+      throw new AuthRejected('Account or session is unavailable');
     }
-    const session = await prisma.userSession.findFirst({
-      where: {
-        userId: user.id,
-        tokenJti: decoded.jti,
-        revokedAt: null,
-        expiresAt: { gt: new Date() },
-      },
-      select: { id: true },
-    });
     if (!session) {
-      throw new Error('Session is revoked or expired');
+      throw new AuthRejected('Session is revoked or expired');
     }
     return { ...decoded, sub: user.id, email: user.email ?? '', role: user.role };
   }
@@ -45,7 +59,7 @@ export class AccessSessionService {
       !['active', 'deletion_pending'].includes(user.accountStatus) ||
       user.sessionVersion !== session.sv
     ) {
-      throw new Error('Account or session is unavailable');
+      throw new AuthRejected('Account or session is unavailable');
     }
     const row = await prisma.userSession.findFirst({
       where: {
@@ -57,7 +71,7 @@ export class AccessSessionService {
       select: { id: true },
     });
     if (!row) {
-      throw new Error('Session is revoked or expired');
+      throw new AuthRejected('Session is revoked or expired');
     }
   }
 }
