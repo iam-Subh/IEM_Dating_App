@@ -1,4 +1,7 @@
+import { PushService } from './push.service';
+import { VerificationLimitsService } from './verification-limits.service';
 import { Prisma } from '@prisma/client';
+import { onlineAmong } from './presence.service';
 import { prisma } from '../utils/prisma';
 import { AnalyticsService } from './analytics.service';
 import { MatchAccessService } from './match-access.service';
@@ -7,9 +10,33 @@ import { OUTBOX_TOPICS, OutboxService } from './outbox.service';
 import { ChatEventService } from './chat-event.service';
 import { createHash } from 'crypto';
 import { redisClient } from '../utils/redis';
+import { StoryReplyCardService } from './story-reply-card.service';
+import { NotificationFeedService } from './notification-feed.service';
 
-const REACTIONS = new Set(['❤️', '👍', '😂', '😮', '😢', '🔥']);
-const MESSAGE_TYPES = new Set(['text', 'media', 'voice', 'story_reply']);
+// Intl.Segmenter ships with Node, but this project's TypeScript lib predates it.
+type GraphemeSegmenter = { segment(input: string): Iterable<unknown> };
+const graphemes: GraphemeSegmenter = new (Intl as unknown as {
+    Segmenter: new (locale: string, options: { granularity: 'grapheme' }) => GraphemeSegmenter;
+}).Segmenter('en', { granularity: 'grapheme' });
+
+/**
+ * A reaction is any single emoji, as in Telegram.
+ *
+ * With the six-item allow-list gone this is the only thing between the database
+ * and arbitrary text. One grapheme rules out "👍👍" and words; the pictographic
+ * test rules out a lone letter or digit, which is also one grapheme. Keycaps
+ * (1️⃣) and flags are built from non-pictographic parts, so they are recognised
+ * first rather than rejected by that test. The length cap is the column's:
+ * VARCHAR(16) counts code points.
+ */
+export function isSingleEmoji(value: unknown): value is string {
+    if (typeof value !== 'string' || !value || [...value].length > 16) return false;
+    if ([...graphemes.segment(value)].length !== 1) return false;
+    if (/^[#*0-9]\uFE0F?\u20E3$/u.test(value)) return true;
+    if (/^\p{Regional_Indicator}{2}$/u.test(value)) return true;
+    return /\p{Extended_Pictographic}/u.test(value) && !/[\p{L}\p{N}]/u.test(value);
+}
+const MESSAGE_TYPES = new Set(['text', 'media', 'document', 'voice', 'story_reply']);
 
 /**
  * Order-independent serialization for the idempotency fingerprint.
@@ -57,6 +84,7 @@ export class ChatService {
                         id: true,
                         name: true,
                         avatarUrl: true,
+                        showOnlineStatus: true,
                         photos: {
                             where: { isPrimary: true },
                             select: { photoUrl: true },
@@ -69,6 +97,7 @@ export class ChatService {
                         id: true,
                         name: true,
                         avatarUrl: true,
+                        showOnlineStatus: true,
                         photos: {
                             where: { isPrimary: true },
                             select: { photoUrl: true },
@@ -82,6 +111,7 @@ export class ChatService {
                         NOT: {
                             hiddenBy: { has: userId },
                         },
+                        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
                     },
                     orderBy: { sentAt: 'desc' },
                     take: 1,
@@ -92,6 +122,15 @@ export class ChatService {
                         sentAt: true,
                         readAt: true,
                         photoUrl: true,
+                        messageSeq: true,
+                        type: true,
+                        metadata: true,
+                        mediaKeys: true,
+                        clientMessageId: true,
+                        replyToId: true,
+                        editedAt: true,
+                        revision: true,
+                        expiresAt: true,
                     },
                 },
                 chatSessions: {
@@ -102,10 +141,51 @@ export class ChatService {
             },
             orderBy: { createdAt: 'desc' },
         });
+        const participants = await prisma.chatParticipant.findMany({
+            where: { userId, matchId: { in: matches.map((match) => match.id) } },
+            select: { matchId: true, mutedUntil: true, archivedAt: true, pinnedAt: true, markedUnread: true, clearedThroughSeq: true, hiddenAt: true },
+        });
+        const lastIds = matches.flatMap(match => match.messages.map(message => message.id));
+        const receipts = lastIds.length ? await prisma.messageReceipt.findMany({
+            where: { messageId: { in: lastIds } },
+            select: { messageId: true, deliveredAt: true, readAt: true, playedAt: true },
+        }) : [];
+        const receiptById = new Map(receipts.map(receipt => [receipt.messageId, receipt]));
+        // Only standing reactions to messages this user can still see may appear.
+        const reactions = matches.length ? await prisma.$queryRaw<Array<{
+            matchId: string; messageId: string; userId: string; emoji: string; at: Date;
+            messageSenderId: string; content: string; type: string;
+        }>>`
+            SELECT DISTINCT ON (m.match_id) m.match_id AS "matchId", m.id AS "messageId",
+                   r.user_id AS "userId", r.emoji, r.updated_at AS "at",
+                   m.sender_id AS "messageSenderId", m.content, m.type
+            FROM message_reactions r JOIN messages m ON m.id = r.message_id
+            LEFT JOIN chat_participants p ON p.match_id = m.match_id AND p.user_id = ${userId}::uuid
+            WHERE m.match_id = ANY(${matches.map(match => match.id)}::uuid[])
+              AND m.is_deleted = false AND NOT (${userId} = ANY(m.hidden_by))
+              AND (m.expires_at IS NULL OR m.expires_at > now())
+              AND (m.message_seq > COALESCE(p.cleared_through_seq, 0)
+                   OR (m.message_seq IS NULL AND COALESCE(p.cleared_through_seq, 0) = 0))
+            ORDER BY m.match_id, r.updated_at DESC, r.id DESC` : [];
+        const reactionByMatch = new Map(reactions.map(reaction => [reaction.matchId, reaction]));
+        const stateByMatch = new Map(participants.map((row) => [row.matchId, row]));
+        const now = new Date();
         // Format conversations
+        // Online dots, both ways: only when you share yours and they share theirs.
+        const me = await prisma.user.findUnique({ where: { id: userId }, select: { showOnlineStatus: true } });
+        const sharing = matches
+            .map((match) => (match.user1Id === userId ? match.user2 : match.user1))
+            .filter((other) => other.showOnlineStatus)
+            .map((other) => other.id);
+        const online = me?.showOnlineStatus ? await onlineAmong(sharing) : new Set<string>();
         const conversations = matches.map((match) => {
             const otherUser = match.user1Id === userId ? match.user2 : match.user1;
-            const lastMessage = match.messages[0] || null;
+            const state = stateByMatch.get(match.id);
+            const clearedThroughSeq = state?.clearedThroughSeq ?? 0;
+            const newest = match.messages[0] || null;
+            // The newest message carries the highest sequence, so if it falls inside
+            // what this user cleared, everything does: the chat reads as empty.
+            const lastMessage = newest && !(clearedThroughSeq > 0 && (newest.messageSeq ?? 0) <= clearedThroughSeq) ? newest : null;
             // Count unread messages (messages sent by the OTHER user that haven't been read)
             return {
                 matchId: match.id,
@@ -113,6 +193,7 @@ export class ChatService {
                     id: otherUser.id,
                     name: otherUser.name,
                     avatar: otherUser.avatarUrl || otherUser.photos[0]?.photoUrl || null,
+                    online: online.has(otherUser.id),
                 },
                 lastMessage: lastMessage
                     ? {
@@ -121,11 +202,33 @@ export class ChatService {
                         senderId: lastMessage.senderId,
                         sentAt: lastMessage.sentAt,
                         isRead: !!lastMessage.readAt,
+                        readAt: lastMessage.readAt,
+                        deliveredAt: receiptById.get(lastMessage.id)?.deliveredAt ?? null,
+                        playedAt: receiptById.get(lastMessage.id)?.playedAt ?? null,
+                        messageSeq: lastMessage.messageSeq,
+                        mediaKeys: lastMessage.mediaKeys,
+                        clientMessageId: lastMessage.clientMessageId,
+                        replyToId: lastMessage.replyToId,
+                        editedAt: lastMessage.editedAt,
+                        revision: lastMessage.revision,
+                        expiresAt: lastMessage.expiresAt,
                         mediaKey: lastMessage.photoUrl,
+                        type: lastMessage.type,
+                        metadata: lastMessage.metadata,
                     }
                     : null,
+                reactionPreview: lastMessage && reactionByMatch.has(match.id) && reactionByMatch.get(match.id)!.at > lastMessage.sentAt
+                    ? reactionByMatch.get(match.id)! : null,
                 createdAt: match.createdAt,
                 activityAt: match.chatSessions[0]?.lastMessageAt ?? lastMessage?.sentAt ?? match.createdAt,
+                pinned: Boolean(state?.pinnedAt),
+                pinnedAt: state?.pinnedAt ?? null,
+                archived: Boolean(state?.archivedAt),
+                mutedUntil: state?.mutedUntil ?? null,
+                muted: Boolean(state?.mutedUntil && state.mutedUntil > now),
+                markedUnread: state?.markedUnread ?? false,
+                hiddenAt: state?.hiddenAt ?? null,
+                messageTtlSeconds: match.messageTtlSeconds ?? null,
             };
         });
         // Sort by last message time (using ChatSession), fallback to match creation
@@ -140,30 +243,46 @@ export class ChatService {
         const matchIds = conversations.map(c => c.matchId);
         let unreadMap = new Map();
         if (matchIds.length > 0) {
-            const unreadCounts = await prisma.message.groupBy({
-                by: ['matchId'],
-                where: {
-                    matchId: { in: matchIds },
-                    senderId: { not: userId },
-                    readAt: null,
-                    isDeleted: false,
-                    NOT: {
-                        hiddenBy: { has: userId },
-                    },
-                },
-                _count: true,
-            });
-            unreadCounts.forEach(item => unreadMap.set(item.matchId, item._count));
+            // One query across every chat, honouring each chat's own cleared-history
+            // watermark, skipping messages past their auto-delete deadline, and not
+            // counting service notices, which nobody wrote and nobody needs to read.
+            const unreadCounts = await prisma.$queryRaw<{ match_id: string; n: number }[]>`
+                SELECT m.match_id, count(*)::int AS n
+                FROM messages m
+                LEFT JOIN chat_participants p ON p.match_id = m.match_id AND p.user_id = ${userId}::uuid
+                WHERE m.match_id = ANY(${matchIds}::uuid[])
+                  AND m.sender_id <> ${userId}::uuid
+                  AND m.read_at IS NULL
+                  AND m.is_deleted = false
+                  AND m.type <> 'service'
+                  AND NOT (${userId} = ANY(m.hidden_by))
+                  AND (m.expires_at IS NULL OR m.expires_at > now())
+                  AND (m.message_seq > COALESCE(p.cleared_through_seq, 0)
+                       OR (m.message_seq IS NULL AND COALESCE(p.cleared_through_seq, 0) = 0))
+                GROUP BY m.match_id`;
+            unreadCounts.forEach((item) => unreadMap.set(item.match_id, item.n));
         }
-        const conversationsWithUnread = conversations.map((conv) => ({
-            ...conv,
-            unreadCount: unreadMap.get(conv.matchId) || 0
-        }));
+        const conversationsWithUnread = conversations
+            // A chat deleted for this user stays out of the list until something new
+            // is said in it - the same thing that brings a deleted chat back in Telegram.
+            .filter((conv) => !conv.hiddenAt || new Date(conv.activityAt) > conv.hiddenAt)
+            .map(({ hiddenAt: _hiddenAt, ...conv }) => ({
+                ...conv,
+                unreadCount: unreadMap.get(conv.matchId) || 0,
+            }));
         const needle = query?.trim().toLocaleLowerCase();
         return needle ? conversationsWithUnread.filter((item) => item.user.name.toLocaleLowerCase().includes(needle) || item.lastMessage?.content.toLocaleLowerCase().includes(needle)) : conversationsWithUnread;
     }
-    static async getConversationsPage(userId: string, query?: string, cursor?: string, limit = 30) {
-        const all = await this.getConversations(userId, query);
+    static async getConversationsPage(userId: string, query?: string, cursor?: string, limit = 30, folder: 'main' | 'archived' = 'main') {
+        const everything = await this.getConversations(userId, query);
+        // A search looks through every chat, archived ones included, as Telegram's does.
+        const all = query?.trim() ? everything : everything.filter((item) => (folder === 'archived') === item.archived);
+        // Pinned chats lead the first page, newest pin first, and are kept out of the
+        // activity-ordered pages behind the cursor so paging can never repeat or skip one.
+        const pinned = all
+            .filter((item) => item.pinned)
+            .sort((a, b) => new Date(b.pinnedAt!).getTime() - new Date(a.pinnedAt!).getTime());
+        const unpinned = all.filter((item) => !item.pinned);
         let decoded = null;
         if (cursor) {
             try {
@@ -179,7 +298,7 @@ export class ChatService {
         const lastTime = decoded ? new Date(decoded.activityAt) : null;
         if (Number.isNaN(highWater.getTime()) || (lastTime && Number.isNaN(lastTime.getTime())))
             throw new HttpError(400, 'Conversation cursor is invalid', 'INVALID_CONVERSATION_CURSOR');
-        const eligible = all.filter((item) => {
+        const eligible = unpinned.filter((item) => {
             const activity = new Date(item.activityAt);
             if (activity > highWater)
                 return false;
@@ -190,19 +309,45 @@ export class ChatService {
         const take = Math.min(Math.max(limit, 1), 100);
         const items = eligible.slice(0, take);
         const last = items[items.length - 1];
+        const archived = everything.filter((item) => item.archived);
         return {
-            items,
+            items: decoded ? items : [...pinned, ...items],
             highWater: highWater.toISOString(),
             nextCursor: eligible.length > take && last ? Buffer.from(JSON.stringify({ highWater: highWater.toISOString(), activityAt: new Date(last.activityAt).toISOString(), id: last.matchId })).toString('base64url') : null,
+            folder,
+            archivedCount: archived.length,
+            archivedUnreadCount: archived.reduce((sum, item) => sum + item.unreadCount, 0),
         };
     }
     /**
      * Get paginated messages for a match. Cursor-based pagination (newest first).
      * If `since` is provided, fetches only messages newer than that timestamp (for incremental sync).
      */
-    static async getMessages(matchId: string, userId: string, cursor?: string, limit: number = 30, since?: string, sinceId?: string) {
+    /**
+     * What this user may see of a conversation's messages.
+     *
+     * Two things are simply absent from every read: history the user cleared, and
+     * messages past their auto-delete deadline that the sweeper has not reached
+     * yet. The second keeps a disappearing message on time without depending on
+     * how recently the sweep ran. Search, context and shared media use the same
+     * rule, so a cleared or expired message cannot resurface through them.
+     */
+    private static async visibilityFor(matchId: string, userId: string) {
+        const participant = await prisma.chatParticipant.findUnique({
+            where: { matchId_userId: { matchId, userId } },
+            select: { clearedThroughSeq: true },
+        });
+        const clearedThroughSeq = participant?.clearedThroughSeq ?? 0;
+        return {
+            clearedThroughSeq,
+            clearedFilter: clearedThroughSeq > 0 ? { messageSeq: { gt: clearedThroughSeq } } : {},
+            notExpired: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        };
+    }
+    static async getMessages(matchId: string, userId: string, cursor?: string, limit: number = 30, since?: string, sinceId?: string, cursorSentAt?: string) {
         await MatchAccessService.requireActiveMatch(userId, matchId);
         const boundedLimit = Math.min(Math.max(limit, 1), 100);
+        const { clearedFilter, notExpired } = await this.visibilityFor(matchId, userId);
         // Incremental sync: fetch only new messages since a timestamp
         if (since) {
             const sinceDate = new Date(since);
@@ -215,6 +360,8 @@ export class ChatService {
                     NOT: {
                         hiddenBy: { has: userId },
                     },
+                    ...clearedFilter,
+                    AND: [notExpired],
                     OR: [
                         { sentAt: { gt: sinceDate } },
                         { sentAt: sinceDate, id: { gt: sinceId } },
@@ -239,13 +386,25 @@ export class ChatService {
                     storyId: true,
                     editedAt: true,
                     revision: true,
+                    expiresAt: true,
                 },
             });
             const hasMore = newMessages.length > 100;
             const page = hasMore ? newMessages.slice(0, 100) : newMessages;
             const reactions = await prisma.messageReaction.findMany({ where: { messageId: { in: page.map((message) => message.id) } } });
+            const receipts = await prisma.messageReceipt.findMany({
+                where: { messageId: { in: page.map((message) => message.id) } },
+                select: { messageId: true, deliveredAt: true, readAt: true, playedAt: true },
+            });
+            const receiptByMessage = new Map(receipts.map((receipt) => [receipt.messageId, receipt]));
+            // Which Story each Story reply answers, resolved now so an expired one reads "unavailable".
+            const storyCards = await StoryReplyCardService.cardsFor(userId, page);
             const messages = page.map((message) => ({
                 ...message,
+                ...(message.type === 'story_reply' ? { story: StoryReplyCardService.cardOf(storyCards, message.storyId) } : {}),
+                deliveredAt: receiptByMessage.get(message.id)?.deliveredAt ?? null,
+                playedAt: receiptByMessage.get(message.id)?.playedAt ?? null,
+                readAt: message.readAt ?? receiptByMessage.get(message.id)?.readAt ?? null,
                 mediaKey: message.photoUrl,
                 mediaKeys: message.mediaKeys || [],
                 photoUrl: undefined,
@@ -259,7 +418,23 @@ export class ChatService {
                 syncCursor: last ? { sentAt: last.sentAt, id: last.id } : { sentAt: sinceDate, id: sinceId },
             };
         }
-        // Full pagination fetch
+        // Full pagination fetch, keyset on (sentAt, id).
+        //
+        // Prisma's `cursor` needs the cursor row to still exist and the order to
+        // be unique. Neither held: the order was sentAt alone, so an album sent
+        // in one millisecond could be split across a page boundary and skipped,
+        // and an auto-deleted or cleared cursor message made every later page
+        // come back empty - history simply stopped scrolling. The anchor's
+        // timestamp is looked up, falling back to the one the client sent, and
+        // the page is everything strictly before (sentAt, id).
+        let before: { sentAt: Date; id: string } | null = null;
+        if (cursor) {
+            const anchor = await prisma.message.findFirst({ where: { id: cursor, matchId }, select: { sentAt: true } });
+            const fallback = cursorSentAt ? new Date(cursorSentAt) : null;
+            const sentAt = anchor?.sentAt ?? (fallback && !Number.isNaN(fallback.getTime()) ? fallback : null);
+            if (!sentAt) throw new HttpError(400, 'A valid history cursor is required', 'INVALID_HISTORY_CURSOR');
+            before = { sentAt, id: cursor };
+        }
         const messages = await prisma.message.findMany({
             where: {
                 matchId,
@@ -267,15 +442,16 @@ export class ChatService {
                 NOT: {
                     hiddenBy: { has: userId },
                 },
+                ...clearedFilter,
+                AND: [
+                    notExpired,
+                    before
+                        ? { OR: [{ sentAt: { lt: before.sentAt } }, { sentAt: before.sentAt, id: { lt: before.id } }] }
+                        : {},
+                ],
             },
-            orderBy: { sentAt: 'desc' },
+            orderBy: [{ sentAt: 'desc' }, { id: 'desc' }],
             take: boundedLimit + 1,
-            ...(cursor
-                ? {
-                    cursor: { id: cursor },
-                    skip: 1,
-                }
-                : {}),
             select: {
                 id: true,
                 content: true,
@@ -293,11 +469,22 @@ export class ChatService {
                 storyId: true,
                 editedAt: true,
                 revision: true,
+                expiresAt: true,
             },
         });
         const reactions = await prisma.messageReaction.findMany({ where: { messageId: { in: messages.map((message) => message.id) } } });
+        const receipts = await prisma.messageReceipt.findMany({
+            where: { messageId: { in: messages.map((message) => message.id) } },
+            select: { messageId: true, deliveredAt: true, readAt: true, playedAt: true },
+        });
+        const receiptByMessage = new Map(receipts.map((receipt) => [receipt.messageId, receipt]));
+        const storyCards = await StoryReplyCardService.cardsFor(userId, messages);
         const mappedMessages = messages.map(m => ({
             ...m,
+            ...(m.type === 'story_reply' ? { story: StoryReplyCardService.cardOf(storyCards, m.storyId) } : {}),
+            deliveredAt: receiptByMessage.get(m.id)?.deliveredAt ?? null,
+            playedAt: receiptByMessage.get(m.id)?.playedAt ?? null,
+            readAt: m.readAt ?? receiptByMessage.get(m.id)?.readAt ?? null,
             mediaKey: m.photoUrl,
             mediaKeys: m.mediaKeys || [],
             photoUrl: undefined,
@@ -349,6 +536,10 @@ export class ChatService {
         if (JSON.stringify(options.metadata ?? {}).length > 4000)
             throw new HttpError(400, 'Message metadata is too large', 'INVALID_MESSAGE_METADATA');
         const metadataKeys = Object.keys(options.metadata ?? {});
+        // No forwarding in a dating app: a message is written to this person,
+        // not passed on from someone else's chat.
+        if (metadataKeys.includes('forwarded'))
+            throw new HttpError(400, 'Forwarding messages is not available', 'FORWARDING_NOT_AVAILABLE');
         if (messageType === 'voice') {
             const duration = options.metadata?.durationSeconds;
             const waveform = options.metadata?.waveform;
@@ -357,7 +548,17 @@ export class ChatService {
                 throw new HttpError(400, 'Voice message metadata is invalid', 'INVALID_MESSAGE_METADATA');
             }
         }
-        if (messageType === 'story_reply' && metadataKeys.some((key) => key !== 'storyOwnerId')) {
+        if (messageType === 'document') {
+            const document = options.metadata?.document as Record<string, unknown> | undefined;
+            const validDocument = document &&
+                typeof document.fileName === 'string' && document.fileName.length > 0 && document.fileName.length <= 255 &&
+                typeof document.mimeType === 'string' && document.mimeType.length > 0 && document.mimeType.length <= 100 &&
+                typeof document.size === 'number' && Number.isSafeInteger(document.size) && document.size >= 0;
+            if (mediaKeys.length !== 1 || !validDocument || metadataKeys.some((key) => key !== 'document')) {
+                throw new HttpError(400, 'Document message metadata is invalid', 'INVALID_MESSAGE_METADATA');
+            }
+        }
+        if (messageType === 'story_reply' && metadataKeys.some((key) => !['storyOwnerId', 'storyReplyKind'].includes(key))) {
             throw new HttpError(400, 'Story reply metadata is invalid', 'INVALID_MESSAGE_METADATA');
         }
         await MatchAccessService.requireActiveMatch(senderId, matchId);
@@ -405,6 +606,7 @@ export class ChatService {
             deletedForEveryoneAt: true,
             revision: true,
             commandFingerprint: true,
+            expiresAt: true,
         };
         if (clientMessageId) {
             const existing = await prisma.message.findUnique({
@@ -420,6 +622,10 @@ export class ChatService {
                 return { ...existing, mediaKey: existing.photoUrl, mediaKeys: existing.mediaKeys, photoUrl: undefined, repeated: true };
             }
         }
+        // Before verifying: 30 messages, voice notes but no photos or videos
+        // (GOOGLE_SIGNUP_PLAN.md 2.3). After the replay check above, so a
+        // retried message is never refused or counted twice.
+        await VerificationLimitsService.requireCanSend(senderId, messageType, requestedKeys.length > 0);
         if (requestedKeys.length) {
             const owned = await prisma.chatMediaAsset.count({
                 where: { objectKey: { in: requestedKeys }, ownerId: senderId, matchId, status: 'uploaded', expiresAt: { gt: new Date() } },
@@ -433,7 +639,7 @@ export class ChatService {
                 await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${matchId}, 1))`;
                 const activeMatch = await tx.match.findUnique({
                     where: { id: matchId },
-                    select: { status: true, user1Id: true, user2Id: true },
+                    select: { status: true, user1Id: true, user2Id: true, messageTtlSeconds: true },
                 });
                 if (!activeMatch ||
                     activeMatch.status !== 'active' ||
@@ -446,6 +652,12 @@ export class ChatService {
                     update: { lastMessageAt: new Date(), lastMessageSeq: { increment: 1 } },
                     select: { lastMessageSeq: true },
                 });
+                // Media the nudity check marked: the receiver's app blurs these keys
+                // until tapped (docs/NUDITY_CHECK.md).
+                const sensitiveKeys = requestedKeys.length
+                    ? (await tx.chatMediaAsset.findMany({ where: { objectKey: { in: requestedKeys }, ownerId: senderId, matchId, sensitive: true }, select: { objectKey: true } })).map((row) => row.objectKey)
+                    : [];
+                const metadata = sensitiveKeys.length ? { ...(options.metadata ?? {}), sensitive: sensitiveKeys } : options.metadata;
                 const created = await tx.message.create({
                     data: {
                         senderId,
@@ -456,10 +668,15 @@ export class ChatService {
                         clientMessageId,
                         messageSeq: session.lastMessageSeq,
                         type: messageType,
-                        metadata: options.metadata as Prisma.InputJsonValue | undefined,
+                        metadata: metadata as Prisma.InputJsonValue | undefined,
                         replyToId: options.replyToId,
                         storyId: options.storyId,
                         commandFingerprint,
+                        // Read inside the same lock that changes the setting, so a
+                        // message can never be sent under one switched off a moment ago.
+                        expiresAt: activeMatch.messageTtlSeconds
+                            ? new Date(Date.now() + activeMatch.messageTtlSeconds * 1000)
+                            : null,
                     },
                     select,
                 });
@@ -476,15 +693,28 @@ export class ChatService {
                     tx.chatParticipant.upsert({
                         where: { matchId_userId: { matchId, userId: senderId } },
                         create: { matchId, userId: senderId },
-                        update: { archivedAt: null },
+                        update: {},
                     }),
                     tx.chatParticipant.upsert({
                         where: { matchId_userId: { matchId, userId: recipientId } },
                         create: { matchId, userId: recipientId, unreadCount: 1 },
-                        update: { unreadCount: { increment: 1 }, archivedAt: null },
+                        update: { unreadCount: { increment: 1 } },
                     }),
                     tx.messageReceipt.create({ data: { messageId: created.id, recipientId } }),
                 ]);
+                // Telegram brings an archived chat back when a message arrives -
+                // unless it is muted, which is exactly how people keep a noisy
+                // conversation archived. Sending does not unarchive your own copy.
+                // Leaving the archive drops the pin, since each folder pins apart.
+                await tx.chatParticipant.updateMany({
+                    where: {
+                        matchId,
+                        userId: recipientId,
+                        archivedAt: { not: null },
+                        OR: [{ mutedUntil: null }, { mutedUntil: { lte: new Date() } }],
+                    },
+                    data: { archivedAt: null, pinnedAt: null },
+                });
                 await OutboxService.enqueue(tx, {
                     topic: OUTBOX_TOPICS.MESSAGE_CREATED,
                     aggregateId: created.id,
@@ -497,7 +727,6 @@ export class ChatService {
                     actorId: senderId,
                     entityId: created.id,
                     payload: { messageId: created.id, messageSeq: created.messageSeq ?? 0 },
-                    enqueueDelivery: false,
                 });
                 return created;
             });
@@ -544,11 +773,16 @@ export class ChatService {
      */
     static async markAsRead(matchId: string, userId: string, messageIds?: string[]) {
         await MatchAccessService.requireActiveMatch(userId, matchId);
+        // Read in the chat, so read in the notification centre too.
+        NotificationFeedService.readWhere(userId, ['message', 'reaction', 'match'], { path: 'matchId', equals: matchId });
         if (messageIds && messageIds.length > 100)
             throw new HttpError(400, 'A maximum of 100 messages can be marked', 'TOO_MANY_MESSAGE_IDS');
         const now = new Date();
-        return prisma.$transaction(async (tx) => {
+        const result = await prisma.$transaction(async (tx) => {
             await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${matchId}, 1))`;
+            // Reading the chat is what clears Telegram's manual "mark as unread",
+            // even when there is nothing new, so this runs before the early return.
+            await tx.chatParticipant.updateMany({ where: { matchId, userId, markedUnread: true }, data: { markedUnread: false } });
             const messages = await tx.message.findMany({
                 where: {
                     matchId,
@@ -611,6 +845,11 @@ export class ChatService {
             });
             return { markedCount: messages.length, throughMessageSeq: maxSeq, readAt: now };
         });
+        // Read here: its notifications leave the status bar on this person's
+        // other phones too (NOTIFICATIONS_PLAN.md 10).
+        if ((result as { markedCount?: number }).markedCount)
+            void PushService.clear(userId, { matchId }).catch(() => undefined);
+        return result;
     }
     static async markDelivered(matchId: string, userId: string, messageIds: string[]) {
         await MatchAccessService.requireActiveMatch(userId, matchId);
@@ -651,6 +890,33 @@ export class ChatService {
                 payload: { userId, messageIds: ids, throughMessageSeq: maxSeq, deliveredAt: now.toISOString() },
             });
             return { markedCount: ids.length, throughMessageSeq: maxSeq };
+        });
+    }
+    /**
+     * A voice note was listened to (MESSAGE_NOTIFICATIONS_PLAN.md 7): the
+     * sender's blue microphone, like WhatsApp's. Once per note and listener;
+     * playing it again changes nothing.
+     */
+    static async markPlayed(matchId: string, userId: string, messageId: string) {
+        await MatchAccessService.requireActiveMatch(userId, matchId);
+        const now = new Date();
+        return prisma.$transaction(async (tx) => {
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${matchId}, 1))`;
+            const message = await tx.message.findFirst({
+                where: { id: messageId, matchId, type: 'voice', isDeleted: false, senderId: { not: userId } },
+                select: { id: true },
+            });
+            if (!message) throw new HttpError(404, 'Voice message is unavailable', 'VOICE_MESSAGE_UNAVAILABLE');
+            const { count } = await tx.messageReceipt.updateMany({
+                where: { messageId, recipientId: userId, playedAt: null },
+                data: { playedAt: now },
+            });
+            if (!count) return { played: false };
+            await ChatEventService.append(tx, {
+                matchId, type: 'message.played', actorId: userId, entityId: messageId,
+                payload: { userId, messageId, playedAt: now.toISOString() },
+            });
+            return { played: true, playedAt: now };
         });
     }
     /**
@@ -740,9 +1006,13 @@ export class ChatService {
         return ChatEventService.list(userId, matchId, afterSeq, limit);
     }
     static async setReaction(matchId: string, messageId: string, userId: string, emoji: string | null) {
-        await MatchAccessService.requireMessage(userId, matchId, messageId);
-        if (emoji !== null && !REACTIONS.has(emoji))
-            throw new HttpError(400, 'Reaction is not supported', 'INVALID_REACTION');
+        const target = await MatchAccessService.requireMessage(userId, matchId, messageId);
+        if (emoji !== null && !isSingleEmoji(emoji))
+            throw new HttpError(400, 'Reaction must be a single emoji', 'INVALID_REACTION');
+        // Service notices ("auto-delete turned on") are not messages anyone wrote,
+        // and Telegram offers no reactions on them.
+        if (target.isDeleted || target.type === 'service')
+            throw new HttpError(409, 'This message cannot be reacted to', 'REACTION_NOT_ALLOWED');
         return prisma.$transaction(async (tx) => {
             await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${matchId}, 1))`;
             let revision = 1;
@@ -763,20 +1033,74 @@ export class ChatService {
                 matchId, type: emoji === null ? 'reaction.removed' : 'reaction.set', actorId: userId,
                 entityId: messageId, entityRevision: revision, payload: { messageId, userId, emoji, revision },
             });
+            // Telegram tells the author when someone reacts to their message. The
+            // delivery re-checks that this is still the standing reaction, so a quick
+            // change of mind only announces what the author will actually see.
+            if (emoji !== null && target.senderId !== userId) {
+                await OutboxService.enqueue(tx, {
+                    topic: OUTBOX_TOPICS.REACTION_ADDED,
+                    aggregateId: messageId,
+                    deduplicationKey: `reaction.added:${messageId}:${userId}:${revision}`,
+                    payload: { reactorId: userId, emoji, revision },
+                });
+            }
             return { messageId, userId, emoji, revision, eventSeq: event.eventSeq };
         });
     }
+    /**
+     * Who reacted, and with what: Telegram's reacted-users list.
+     *
+     * A private chat holds at most two reactions (one each), so there is nothing
+     * to page through; the per-emoji counts still drive the filter tabs.
+     */
+    static async listReactions(matchId: string, messageId: string, userId: string) {
+        const message = await MatchAccessService.requireMessage(userId, matchId, messageId);
+        if (message.isDeleted || message.hiddenBy.includes(userId))
+            throw new HttpError(404, 'Message is unavailable', 'MESSAGE_UNAVAILABLE');
+        const rows = await prisma.messageReaction.findMany({
+            where: { messageId },
+            orderBy: [{ updatedAt: 'desc' }, { userId: 'asc' }],
+            select: { userId: true, emoji: true, updatedAt: true },
+        });
+        const users = rows.length
+            ? await prisma.user.findMany({
+                where: { id: { in: rows.map((row) => row.userId) } },
+                select: { id: true, name: true, avatarUrl: true, photos: { where: { isPrimary: true }, select: { photoUrl: true }, take: 1 } },
+            })
+            : [];
+        const byId = new Map(users.map((user) => [user.id, user]));
+        const counts = new Map<string, number>();
+        for (const row of rows) counts.set(row.emoji, (counts.get(row.emoji) ?? 0) + 1);
+        return {
+            total: rows.length,
+            counts: [...counts.entries()].map(([emoji, count]) => ({ emoji, count })).sort((a, b) => b.count - a.count),
+            reactors: rows.map((row) => {
+                const user = byId.get(row.userId);
+                return {
+                    userId: row.userId,
+                    name: user?.name ?? 'Unknown',
+                    avatar: user?.avatarUrl || user?.photos[0]?.photoUrl || null,
+                    emoji: row.emoji,
+                    reactedAt: row.updatedAt,
+                };
+            }),
+        };
+    }
     static async setMuted(matchId: string, userId: string, mutedUntil: Date | null) {
         await MatchAccessService.requireActiveMatch(userId, matchId);
-        return prisma.chatParticipant.upsert({
+        const result = await prisma.chatParticipant.upsert({
             where: { matchId_userId: { matchId, userId } },
             create: { matchId, userId, mutedUntil },
             update: { mutedUntil },
             select: { matchId: true, mutedUntil: true },
         });
+        // Muted: its notification leaves this person's phones (MESSAGE_NOTIFICATIONS_PLAN.md 9).
+        if (mutedUntil && mutedUntil > new Date()) void PushService.clear(userId, { matchId }).catch(() => undefined);
+        return result;
     }
     static async searchMessages(matchId: string, userId: string, query: string, limit = 50) {
         await MatchAccessService.requireActiveMatch(userId, matchId);
+        const { clearedFilter, notExpired } = await this.visibilityFor(matchId, userId);
         const cleaned = query.trim();
         if (cleaned.length < 2 || cleaned.length > 100)
             throw new HttpError(400, 'Search text must contain 2 to 100 characters', 'INVALID_MESSAGE_SEARCH');
@@ -787,6 +1111,8 @@ export class ChatService {
                 isDeleted: false,
                 id: { notIn: hidden.map((item) => item.messageId) },
                 content: { contains: cleaned, mode: 'insensitive' },
+                ...clearedFilter,
+                AND: [notExpired],
             },
             orderBy: [{ sentAt: 'desc' }, { id: 'desc' }],
             take: Math.min(Math.max(limit, 1), 100),
@@ -799,8 +1125,23 @@ export class ChatService {
             throw new HttpError(400, 'Search text must contain 2 to 100 characters', 'INVALID_MESSAGE_SEARCH');
         const matches = await prisma.match.findMany({ where: { status: 'active', OR: [{ user1Id: userId }, { user2Id: userId }] }, select: { id: true } });
         const hidden = await prisma.messageVisibility.findMany({ where: { userId }, select: { messageId: true } });
+        const watermarks = await prisma.chatParticipant.findMany({
+            where: { userId, matchId: { in: matches.map((item) => item.id) }, clearedThroughSeq: { gt: 0 } },
+            select: { matchId: true, clearedThroughSeq: true },
+        });
+        const clearedByMatch = new Map(watermarks.map((row) => [row.matchId, row.clearedThroughSeq]));
         return prisma.message.findMany({
-            where: { matchId: { in: matches.map((item) => item.id) }, id: { notIn: hidden.map((item) => item.messageId) }, isDeleted: false, content: { contains: cleaned, mode: 'insensitive' } },
+            where: {
+                // Each chat is searched only past the point this user cleared it to.
+                OR: matches.map((item) => ({
+                    matchId: item.id,
+                    ...(clearedByMatch.has(item.id) ? { messageSeq: { gt: clearedByMatch.get(item.id)! } } : {}),
+                })),
+                AND: [{ OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] }],
+                id: { notIn: hidden.map((item) => item.messageId) },
+                isDeleted: false,
+                content: { contains: cleaned, mode: 'insensitive' },
+            },
             orderBy: [{ sentAt: 'desc' }, { id: 'desc' }],
             take: Math.min(Math.max(limit, 1), 100),
             select: { id: true, matchId: true, senderId: true, content: true, sentAt: true, messageSeq: true, editedAt: true, revision: true },
@@ -808,22 +1149,95 @@ export class ChatService {
     }
     static async messageContext(matchId: string, messageId: string, userId: string) {
         await MatchAccessService.requireActiveMatch(userId, matchId);
+        const { clearedFilter, notExpired } = await this.visibilityFor(matchId, userId);
         const hidden = await prisma.messageVisibility.findUnique({ where: { messageId_userId: { messageId, userId } } });
         if (hidden)
             throw new HttpError(404, 'Message is unavailable', 'MESSAGE_UNAVAILABLE');
-        const target = await prisma.message.findFirst({ where: { id: messageId, matchId, isDeleted: false }, select: { messageSeq: true } });
+        const target = await prisma.message.findFirst({ where: { id: messageId, matchId, isDeleted: false, ...clearedFilter, AND: [notExpired] }, select: { messageSeq: true } });
         if (!target)
             throw new HttpError(404, 'Message is unavailable', 'MESSAGE_UNAVAILABLE');
         const invisible = await prisma.messageVisibility.findMany({ where: { userId }, select: { messageId: true } });
-        return prisma.message.findMany({
+        const messages = await prisma.message.findMany({
             where: {
                 matchId,
                 isDeleted: false,
                 id: { notIn: invisible.map((item) => item.messageId) },
-                ...(target.messageSeq ? { messageSeq: { gte: Math.max(1, target.messageSeq - 15), lte: target.messageSeq + 15 } } : {}),
+                AND: [
+                    notExpired,
+                    clearedFilter,
+                    target.messageSeq ? { messageSeq: { gte: Math.max(1, target.messageSeq - 15), lte: target.messageSeq + 15 } } : {},
+                ],
             },
             orderBy: [{ messageSeq: 'asc' }, { sentAt: 'asc' }, { id: 'asc' }],
             take: 31,
         });
+        const receipts = await prisma.messageReceipt.findMany({
+            where: { messageId: { in: messages.map((message) => message.id) } },
+            select: { messageId: true, deliveredAt: true, readAt: true, playedAt: true },
+        });
+        const receiptByMessage = new Map(receipts.map((receipt) => [receipt.messageId, receipt]));
+        return messages.map((message) => ({
+            ...message,
+            mediaKey: message.photoUrl,
+            mediaKeys: message.mediaKeys || [],
+            photoUrl: undefined,
+            deliveredAt: receiptByMessage.get(message.id)?.deliveredAt ?? null,
+            playedAt: receiptByMessage.get(message.id)?.playedAt ?? null,
+            readAt: message.readAt ?? receiptByMessage.get(message.id)?.readAt ?? null,
+        }));
+    }
+
+    static async getSharedMessages(
+        matchId: string,
+        userId: string,
+        type: 'media' | 'document' | 'voice' | 'link',
+        cursor?: string,
+        limit = 40,
+    ) {
+        await MatchAccessService.requireActiveMatch(userId, matchId);
+        const { clearedFilter, notExpired } = await this.visibilityFor(matchId, userId);
+        const take = Math.min(Math.max(limit, 1), 80);
+        const hidden = await prisma.messageVisibility.findMany({ where: { userId }, select: { messageId: true } });
+        // Links are URLs someone wrote: text and captions. Matching any content
+        // containing "http" also caught voice notes and other attachments whose
+        // content carries a URL, so the Links tab listed voice messages.
+        const typeWhere = type === 'link'
+            ? {
+                type: { in: ['text', 'media', 'document', 'story_reply'] },
+                OR: ['http://', 'https://', 'www.'].map((prefix) => ({
+                    content: { contains: prefix, mode: Prisma.QueryMode.insensitive },
+                })),
+            }
+            : { type };
+        const messages = await prisma.message.findMany({
+            where: {
+                matchId,
+                isDeleted: false,
+                id: { notIn: hidden.map((item) => item.messageId) },
+                ...typeWhere,
+                ...clearedFilter,
+                AND: [notExpired],
+            },
+            orderBy: [{ sentAt: 'desc' }, { id: 'desc' }],
+            take: take + 1,
+            ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+            select: {
+                id: true, matchId: true, senderId: true, content: true, sentAt: true,
+                readAt: true, mediaKeys: true, photoUrl: true, type: true, metadata: true,
+                replyToId: true, messageSeq: true, editedAt: true, revision: true,
+            },
+        });
+        const hasMore = messages.length > take;
+        const page = hasMore ? messages.slice(0, take) : messages;
+        return {
+            messages: page.map((message) => ({
+                ...message,
+                mediaKey: message.photoUrl,
+                mediaKeys: message.mediaKeys || [],
+                photoUrl: undefined,
+            })),
+            nextCursor: hasMore ? page[page.length - 1]?.id ?? null : null,
+            hasMore,
+        };
     }
 }
