@@ -1,12 +1,12 @@
 export const colors = {
   // "Glass & Mist" Dark Theme Core
-  primary: '#f20d80',        // Vibrant Pink/Neon Rose
-  primaryLight: '#ff4d94',
+  primary: '#FF5A5F',        // Sunset Coral
+  primaryLight: '#FF7E82',
   secondary: '#3B82F6',      // Electric Blue (accents)
   accent: '#a855f7',         // Purple
   
   // Backgrounds
-  background: '#050505',     // Deepest Dark for Mesh Background
+  background: '#100F0D',     // Primary app background
   surface: '#1a1618',        // Surface for Glass Panels
   
   // Text
@@ -19,7 +19,7 @@ export const colors = {
   
   // Borders & Dividers
   border: 'rgba(255, 255, 255, 0.1)',
-  glassBorder: 'rgba(242, 13, 128, 0.2)', // Slight pink tint for primary glass
+  glassBorder: 'rgba(255, 90, 95, 0.2)', // Slight coral tint for primary glass
   
   // Status
   error: '#ef4444',
