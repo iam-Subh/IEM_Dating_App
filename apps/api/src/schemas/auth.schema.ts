@@ -44,20 +44,33 @@ export const verifyOtpSchema = z.object({
   }),
 });
 
-export const sendPhoneOtpSchema = z.object({
+export const googleSignInSchema = z.object({
   body: z.object({
-    phone: z.string().regex(
-      /^\+91\d{10}$/,
-      'Must be a valid Indian phone number (e.g., +919876543210)'
-    ),
+    idToken: z.string().min(20).max(4096),
+    deviceInfo: z.record(z.string(), z.unknown()).optional(),
   }),
 });
 
-export const verifyPhoneOtpSchema = z.object({
+export const googleLinkSchema = z.object({
   body: z.object({
-    phone: z.string().regex(/^\+91\d{10}$/, 'Invalid phone number'),
-    code: z.string().length(6, 'Code must be exactly 6 digits'),
-    challengeId: z.string().uuid(),
+    idToken: z.string().min(20).max(4096),
+    password: z.string().min(1).max(200),
+    deviceInfo: z.record(z.string(), z.unknown()).optional(),
+  }),
+});
+
+export const googleConnectSchema = z.object({
+  body: z.object({ idToken: z.string().min(20).max(4096) }),
+});
+
+export const setPasswordSchema = z.object({
+  body: z.object({ password: z.string().min(8, 'Password must be at least 8 characters long').max(200) }),
+});
+
+export const changePasswordSchema = z.object({
+  body: z.object({
+    currentPassword: z.string().min(1, 'Enter your current password').max(200),
+    newPassword: z.string().min(8, 'Password must be at least 8 characters long').max(200),
   }),
 });
 

@@ -11,7 +11,7 @@ export const sendMessageSchema = z.object({
     mediaKey: z.string().optional(),
     mediaKeys: z.array(z.string().min(1).max(500)).max(10).optional(),
     clientMessageId: z.string().min(1).max(100).optional(),
-    type: z.enum(['text', 'media', 'voice', 'story_reply']).optional(),
+    type: z.enum(['text', 'media', 'document', 'voice', 'story_reply']).optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
     replyToId: z.string().uuid().optional(),
     storyId: z.string().uuid().optional(),
@@ -37,7 +37,17 @@ export const receiptSchema = z.object({
 });
 
 export const reactionSchema = z.object({
-  body: z.object({ emoji: z.enum(['❤️', '👍', '😂', '😮', '😢', '🔥']).nullable() }),
+  // Any single emoji. The shape is checked here; that it is exactly one emoji is
+  // checked by the service, which is the one place that rule lives.
+  body: z.object({ emoji: z.string().min(1).max(64).nullable() }).strict(),
+});
+
+export const pinConversationSchema = z.object({ body: z.object({ pinned: z.boolean() }).strict() });
+export const archiveConversationSchema = z.object({ body: z.object({ archived: z.boolean() }).strict() });
+export const unreadConversationSchema = z.object({ body: z.object({ unread: z.boolean() }).strict() });
+export const clearConversationSchema = z.object({ body: z.object({ forEveryone: z.boolean().default(false) }).strict() });
+export const messageTtlSchema = z.object({
+  body: z.object({ seconds: z.number().int().min(60).max(366 * 24 * 60 * 60).nullable() }).strict(),
 });
 
 export const muteSchema = z.object({
