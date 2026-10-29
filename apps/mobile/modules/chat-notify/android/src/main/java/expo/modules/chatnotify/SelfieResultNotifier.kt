@@ -34,7 +34,7 @@ object SelfieResultNotifier {
     if (!manager.areNotificationsEnabled()) return true
     return runCatching {
       val content = RemoteNotificationContent(remote)
-      val channelId = remote.data["channelId"]?.takeIf { it == "verification" || it == "picks" } ?: "verification"
+      val channelId = remote.data["channelId"]?.takeIf { it == "verification_v2" || it == "picks_v2" } ?: "verification_v2"
       ensureChannel(context, channelId)
       val key = data.optString("notificationId").ifEmpty { data.optString("pushId").ifEmpty { "selfie-result:$owner" } }
       val url = Uri.parse("iemdating://main/Profile").buildUpon().apply {
@@ -84,8 +84,9 @@ object SelfieResultNotifier {
     val manager = context.getSystemService(NotificationManager::class.java)
     if (manager.getNotificationChannel(id) != null) return
     manager.createNotificationChannel(NotificationChannel(id,
-      if (id == "picks") "Picks and tips" else "Verification",
-      if (id == "picks") NotificationManager.IMPORTANCE_LOW else NotificationManager.IMPORTANCE_DEFAULT).apply {
+      if (id == "picks_v2") "Picks and tips" else "Verification",
+      // As channels.ts: verification pops up; picks sound without a banner.
+      if (id == "picks_v2") NotificationManager.IMPORTANCE_DEFAULT else NotificationManager.IMPORTANCE_HIGH).apply {
         lockscreenVisibility = NotificationCompat.VISIBILITY_PRIVATE
       })
   }

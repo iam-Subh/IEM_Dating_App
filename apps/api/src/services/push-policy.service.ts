@@ -9,7 +9,14 @@ import type { PushCategory } from './app-settings.service';
  * (apps/mobile/src/features/notifications/push/channels.ts).
  */
 
-export type ChannelId = 'messages' | 'matches' | 'likes' | 'social' | 'verification' | 'account' | 'picks';
+export type ChannelId = 'messages' | 'matches' | 'likes_v2' | 'social' | 'verification_v2' | 'account' | 'picks_v2' | 'standouts';
+
+/**
+ * A push kind with a channel of its own, within its category's setting:
+ * "Today's Standouts are ready" is a picks push (the same switch, the same
+ * once a day), but pops up in its own Standouts channel - tips stay quieter.
+ */
+export const CHANNEL_OF_KIND: Partial<Record<string, ChannelId>> = { standouts: 'standouts' };
 
 type Policy = {
   channel: ChannelId;
@@ -30,18 +37,18 @@ export const PUSH_POLICY: Record<PushCategory, Policy> = {
   messages: { channel: 'messages', priority: 'high', ttl: 28 * DAY, quiet: 'messages' },
   reactions: { channel: 'messages', priority: 'normal', ttl: 2 * DAY, quiet: 'wait' },
   matches: { channel: 'matches', priority: 'high', ttl: 7 * DAY, quiet: 'messages' },
-  likes: { channel: 'likes', priority: 'normal', ttl: DAY, quiet: 'wait' },
-  roses: { channel: 'likes', priority: 'high', ttl: 2 * DAY, quiet: 'wait' },
+  likes: { channel: 'likes_v2', priority: 'normal', ttl: DAY, quiet: 'wait' },
+  roses: { channel: 'likes_v2', priority: 'high', ttl: 2 * DAY, quiet: 'wait' },
   follow_requests: { channel: 'social', priority: 'normal', ttl: 2 * DAY, quiet: 'wait' },
   story_mentions: { channel: 'social', priority: 'normal', ttl: DAY, quiet: 'wait' },
   story_activity: { channel: 'social', priority: 'normal', ttl: DAY, quiet: 'wait' },
   story_countdowns: { channel: 'social', priority: 'normal', ttl: 6 * HOUR, quiet: 'wait' },
   story_problems: { channel: 'social', priority: 'normal', ttl: DAY, quiet: 'wait' },
-  verify_reminders: { channel: 'verification', priority: 'normal', ttl: 3 * DAY, quiet: 'wait' },
+  verify_reminders: { channel: 'verification_v2', priority: 'normal', ttl: 3 * DAY, quiet: 'wait' },
   account_security: { channel: 'account', priority: 'high', ttl: 7 * DAY, quiet: 'always' },
-  team_updates: { channel: 'picks', priority: 'normal', ttl: 3 * DAY, quiet: 'wait' },
-  picks: { channel: 'picks', priority: 'normal', ttl: 6 * HOUR, quiet: 'wait', spicy: true },
-  nudges: { channel: 'picks', priority: 'normal', ttl: 12 * HOUR, quiet: 'wait', spicy: true },
+  team_updates: { channel: 'picks_v2', priority: 'normal', ttl: 3 * DAY, quiet: 'wait' },
+  picks: { channel: 'picks_v2', priority: 'normal', ttl: 6 * HOUR, quiet: 'wait', spicy: true },
+  nudges: { channel: 'picks_v2', priority: 'normal', ttl: 12 * HOUR, quiet: 'wait', spicy: true },
 };
 
 /** Button sets the app registers (push/categories.ts); a push names one by its kind. */

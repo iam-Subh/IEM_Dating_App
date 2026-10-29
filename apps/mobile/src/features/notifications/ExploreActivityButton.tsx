@@ -43,7 +43,7 @@ function UnreadCounter({ total, arrivalId }: { total: number; arrivalId: string 
 }
 
 const styles = StyleSheet.create({
-  button: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#242323' },
+  button: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#242323' },
   pressed: { backgroundColor: '#363433' },
   counter: { position: 'absolute', top: -3, right: -3, minWidth: 20, height: 20, borderRadius: 10,
     paddingHorizontal: 4, borderWidth: 2, borderColor: '#100F0D', backgroundColor: '#FF4F69',

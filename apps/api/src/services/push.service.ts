@@ -2,8 +2,11 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../utils/prisma';
 import { logger } from '../utils/logger';
 import { pushDecision, type PushCategory } from './app-settings.service';
-import { BUTTONS_OF_KIND, PUSH_POLICY, quietHoursEnd } from './push-policy.service';
+import { BUTTONS_OF_KIND, CHANNEL_OF_KIND, PUSH_POLICY, quietHoursEnd } from './push-policy.service';
 import { encryptForPhone, openPhoneKey, parsePhoneKey, sealPhoneKey } from './push-crypto.service';
+
+/** Android's silent channel for chat messages in quiet hours (app: channels.ts QUIET_CHANNEL). */
+const QUIET_CHANNEL = 'quiet_hours';
 
 export type PushMessage = {
   title: string;
@@ -140,8 +143,8 @@ export class PushService {
           to: device.token,
           // iOS: the Sound switch. Android: the channel's own settings.
           sound: decision.sound && !silent ? 'default' : null,
-          // Quiet hours for a chat message: the quiet channel.
-          channelId: silent ? 'picks' : decision.channelId,
+          // Quiet hours for a chat message: the app's silent channel (channels.ts).
+          channelId: silent ? QUIET_CHANNEL : (message.kind && CHANNEL_OF_KIND[message.kind]) || decision.channelId,
           priority: policy.priority,
           ttl: policy.ttl,
           ...(buttons ? { categoryId: buttons } : {}),
