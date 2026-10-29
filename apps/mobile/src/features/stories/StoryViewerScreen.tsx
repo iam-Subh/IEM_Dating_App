@@ -1,3 +1,4 @@
+import { findStoryRing, markStoryClosed, type ScreenRect } from './storyReturn';
 import { VerifiedBadge } from '../discovery/components/VerifiedBadge';
 import { openVerifyRules } from '../verification/verifyGate';
 import { openReport } from '../safety/ReportSheet';
@@ -20,6 +21,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { StoryGestureGuide, markStoryGuideSeen, shouldShowStoryGuide } from '../teaching/StoryGestureGuide';
 import { api } from '../../services/api';
 import { ChatMedia } from '../../../modules/chat-media';
 import { colors } from '../../core/theme/colors';
@@ -233,6 +235,8 @@ export type StoryViewerProps = {
    * when it handled the press (closing the Activity sheet).
    */
   backRef?: React.MutableRefObject<(() => boolean) | null>;
+  /** The tapped ring, on screen: the viewer grows out of it, the way it shrinks back on close. */
+  openFrom?: ScreenRect | null;
 };
 
 /** The navigation screen for real Stories. */
@@ -242,13 +246,14 @@ export function StoryViewerScreen({ route, navigation }: any) {
       initialGroups={route.params?.groups ?? []}
       startGroupIndex={route.params?.startGroupIndex}
       storyId={route.params?.storyId}
+      openFrom={route.params?.openFrom}
       onClose={() => navigation.goBack()}
     />
   );
 }
 
 export function StoryViewer({
-  initialGroups, startGroupIndex = 0, storyId: linkedStoryId, onClose, demo = false, demoViewers, onSeen, onLiked, backRef,
+  initialGroups, startGroupIndex = 0, storyId: linkedStoryId, onClose, demo = false, demoViewers, onSeen, onLiked, backRef, openFrom,
 }: StoryViewerProps) {
   const { width: windowWidth, height } = useWindowDimensions();
   const navigation = useNavigation<any>();
@@ -263,6 +268,18 @@ export function StoryViewer({
   const [missing, setMissing] = useState<string | null>(null);
 
   const [held, setHeld] = useState(false);
+  // How Stories move, over the first Story anyone opens, once (teaching/tipsSeen).
+  // It waits for that Story to be on screen, and counts as seen once it shows.
+  const [guidePending, setGuidePending] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const guideOpenRef = useRef(false);
+  guideOpenRef.current = guideOpen;
+  useEffect(() => {
+    let live = true;
+    void shouldShowStoryGuide(demo).then((show) => { if (live && show) setGuidePending(true); });
+    return () => { live = false; };
+  }, [demo]);
+  const closeGuide = useCallback(() => setGuideOpen(false), []);
   const [dragging, setDragging] = useState(false);
   const [typing, setTyping] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -319,7 +336,15 @@ export function StoryViewer({
   const ready = !!story && readyId === story.id;
   // A locked Reveal video does not play, so it is timed like a photo.
   const isVideo = !!source?.contentType.startsWith('video/') && !source.locked;
-  const paused = held || dragging || typing || sheetOpen || activityOpen || backgrounded || transitioning || stickerBusy || zooming || !!matchProfile;
+  const paused = held || guideOpen || dragging || typing || sheetOpen || activityOpen || backgrounded || transitioning || stickerBusy || zooming || !!matchProfile;
+  const [everReady, setEverReady] = useState(false);
+  useEffect(() => { if (ready) setEverReady(true); }, [ready]);
+  useEffect(() => {
+    if (!guidePending || !ready) return;
+    setGuidePending(false);
+    setGuideOpen(true);
+    markStoryGuideSeen(demo);
+  }, [demo, guidePending, ready]);
 
   // Create the zero value in the same render that selects the next Story.
   // An effect reset is too late: the new bar can draw the old progress first.
@@ -377,6 +402,29 @@ export function StoryViewer({
     cancelAnimation(progress);
   };
   const closing = useRef(false);
+  // Closing into the owner's ring: 0 is the Story as it is, 1 is inside the ring.
+  // Opening runs the close in reverse: from the ring (1) out to full screen (0),
+  // set before the first frame so the Story never flashes full size first.
+  const exitProgress = useSharedValue(openFrom ? 1 : 0);
+  const exitTarget = useSharedValue(openFrom
+    ? { cx: openFrom.x + openFrom.width / 2, cy: openFrom.y + openFrom.height / 2, size: openFrom.width }
+    : { cx: 0, cy: 0, size: 0 });
+  const exitFrom = useSharedValue({ scale: 1, y: 0 });
+  // While opening, like a lightbox: the whole Story scales up out of the ring,
+  // transforms only, fully opaque - no clip resizing or fade, which stuttered.
+  const entering = useSharedValue(openFrom ? 1 : 0);
+  useEffect(() => {
+    if (!openFrom) return;
+    // A frame late, so mounting the viewer does not eat the animation's first frames.
+    const frame = requestAnimationFrame(() => {
+      exitProgress.value = withTiming(0, { duration: 280, easing: Easing.out(Easing.cubic) }, (finished) => {
+        if (finished) entering.value = 0;
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+    // Once, on open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const viewed = useRef(new Set<string>());
   const inputRef = useRef<TextInput>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -548,14 +596,46 @@ export function StoryViewer({
   // "exited" event; left false when `close` runs to move past the very last
   // Story (tap or auto-advance already tracked their own event, or none at
   // all), or when a menu action closes the viewer to navigate elsewhere.
-  const close = useCallback((exit = false) => {
+  // `toRing`: shrink back into the owner's ring first (Back, X, swipe down,
+  // the last Story ending). Never when a menu closes the viewer to open
+  // another screen - that navigation must not race the animation.
+  const close = useCallback((exit = false, toRing = exit) => {
     if (closing.current) return;
     closing.current = true;
+    // The guide goes at once, not with the Story as it shrinks away.
+    setGuidePending(false);
+    setGuideOpen(false);
     if (exit && story && group && !group.isOwn) insightTracker.exited(story.id);
     void insightTracker.flush();
+    // The tray keeps its order on the way back (StoryTray), so this refresh
+    // only brings seen rings and counts up to date.
+    markStoryClosed();
     if (!demo) void queryClient.invalidateQueries({ queryKey: STORY_TRAY_QUERY_KEY });
-    onClose();
-  }, [demo, group, insightTracker, onClose, queryClient, story]);
+    if (!toRing || !group) { onClose(); return; }
+    void findStoryRing(group.owner.id).then((ring) => {
+      if (!ring) {
+        // A swipe down with nowhere to go back to: finish the slide away.
+        if (dragY.value > 0) {
+          runOnUI(() => {
+            'worklet';
+            dragY.value = withTiming(height, { duration: 220, easing: Easing.in(Easing.quad) }, (finished) => {
+              if (finished) runOnJS(onClose)();
+            });
+          })();
+        } else onClose();
+        return;
+      }
+      runOnUI((target: { cx: number; cy: number; size: number }) => {
+        'worklet';
+        // Start from wherever the Story is now (a swipe down has already moved it).
+        exitFrom.value = { scale: 1 - Math.min(1, dragY.value / height) * 0.3, y: dragY.value * 0.85 };
+        exitTarget.value = target;
+        exitProgress.value = withTiming(1, { duration: 300, easing: Easing.bezier(0.2, 0, 0, 1) }, (finished) => {
+          if (finished) runOnJS(onClose)();
+        });
+      })({ cx: ring.x + ring.width / 2, cy: ring.y + ring.height / 2, size: ring.width });
+    });
+  }, [demo, dragY, exitFrom, exitProgress, exitTarget, group, height, insightTracker, onClose, queryClient, story]);
 
   // Load this Story's media, and warm the next two and the neighbouring people.
   useEffect(() => {
@@ -642,7 +722,8 @@ export function StoryViewer({
   const moveTo = useCallback((target: StoryPosition | null) => {
     if (transitioning || cubeSettling.value || panActive.value || position.group !== groupPosition.value) return;
     if (!target) {
-      close();
+      // The last Story has ended: back into its ring.
+      close(false, true);
       return;
     }
     if (target.group === position.group) {
@@ -810,6 +891,10 @@ export function StoryViewer({
   activityOpenRef.current = activityOpen;
   useEffect(() => {
     const handleBack = () => {
+      if (guideOpenRef.current) {
+        setGuideOpen(false);
+        return true;
+      }
       if (activityOpenRef.current) {
         closeActivity();
         return true;
@@ -1136,9 +1221,9 @@ export function StoryViewer({
             settleCube(event.velocityX, 0);
           }
         } else if (dragY.value > height * 0.15 || event.velocityY > 900) {
-          dragY.value = withTiming(height, { duration: 220, easing: Easing.in(Easing.quad) }, (finished) => {
-            if (finished) runOnJS(closeFromGesture)(true);
-          });
+          // From where the finger let go, straight into the owner's ring
+          // (close() slides it away instead when there is no ring to go to).
+          runOnJS(closeFromGesture)(true);
         } else {
           dragY.value = withSpring(0, { damping: 22, stiffness: 240 });
           if (event.translationY < -70) runOnJS(swipeUp)();
@@ -1264,12 +1349,50 @@ export function StoryViewer({
     const sheetShift = (insets.top + 8 - (height / 2) * (1 - fitScale)) * risen;
     const scale = (1 - pulled * 0.3) * sheetScale;
     const radius = Math.max(18 * risen, pulled > 0 ? 18 : 0);
+    const e = exitProgress.value;
+    if (e > 0 && entering.value) {
+      const target = exitTarget.value;
+      const grown = 1 + (target.size / width - 1) * e;
+      return {
+        borderRadius: (width / 2) * e,
+        transform: [
+          { translateX: (target.cx - width / 2) * e },
+          { translateY: (target.cy - height / 2) * e },
+          { scale: grown },
+        ],
+      };
+    }
+    if (e > 0) {
+      // Shrinking into the ring: from where it was to the ring's centre and
+      // size, the corners rounding into a circle, fading into the avatar at the end.
+      const target = exitTarget.value;
+      const from = exitFrom.value;
+      const endScale = target.size / width;
+      const exitScale = from.scale + (endScale - from.scale) * e;
+      // The tall Story is trimmed top and bottom as it shrinks, to a square -
+      // so it lands as a circle, not a pill. Only this clip changes size; the
+      // Story inside stays laid out at full screen (exitContentStyle).
+      const trim = Math.max(0, height - width) * e;
+      return {
+        top: trim / 2,
+        bottom: trim / 2,
+        borderRadius: 18 + (width / 2 - 18) * e,
+        opacity: e < 0.65 ? 1 : 1 - (e - 0.65) / 0.35,
+        transform: [
+          { translateX: (target.cx - width / 2) * e },
+          { translateY: from.y * (1 - e) + (target.cy - height / 2) * e },
+          { scale: exitScale },
+        ],
+      };
+    }
     return {
       borderRadius: radius / Math.max(scale, 0.2),
       transform: [{ translateY: dragY.value * 0.85 + sheetShift }, { scale }],
     };
   });
-  const backdropStyle = useAnimatedStyle(() => ({ opacity: 1 - Math.min(1, dragY.value / (height * 0.5)) }));
+  const backdropStyle = useAnimatedStyle(() => ({ opacity: (1 - Math.min(1, dragY.value / (height * 0.5))) * (1 - exitProgress.value) }));
+  // Holds the Story still while its clip narrows (see dismissStyle).
+  const exitContentStyle = useAnimatedStyle(() => ({ transform: [{ translateY: entering.value ? 0 : -(Math.max(0, height - width) * exitProgress.value) / 2 }] }));
   const zoomStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: zoomX.value }, { translateY: zoomY.value }, { scale: zoomScale.value }],
   }));
@@ -1309,6 +1432,8 @@ export function StoryViewer({
       <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.backdrop, backdropStyle]} />
       <GestureDetector gesture={gesture}>
       <Animated.View collapsable={false} style={[StyleSheet.absoluteFill, styles.dismiss, dismissStyle]}>
+        {/* Fixed at full size: only the clip around it narrows to a square when closing. */}
+        <Animated.View style={[styles.exitContent, { height }, exitContentStyle]}>
         {pages.map((index) => (
           <CubePage key={groups[index].owner.id} index={index} active={index === position.group} position={cubePosition} width={width}>
             <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, index === position.group ? stillUnderZoomStyle : null]}>
@@ -1387,6 +1512,11 @@ export function StoryViewer({
                   </View>
                 ) : null}
 
+                {/* Until the first Story arrives, its owner's photo fills the screen, softened, as a lightbox shows the thumbnail. */}
+                {!everReady && !ready && !failed && group.owner.avatarUrl ? (
+                  <Image source={{ uri: group.owner.avatarUrl }} blurRadius={10}
+                    style={[StyleSheet.absoluteFill, styles.openingStill]} resizeMode="cover" />
+                ) : null}
                 {showSpinner && !ready && !failed ? (
                   <View pointerEvents="none" style={styles.centerState}><ActivityIndicator color="#fff" size="large" /></View>
                 ) : null}
@@ -1458,6 +1588,7 @@ export function StoryViewer({
           </CubePage>
         ))}
       </Animated.View>
+        </Animated.View>
       </GestureDetector>
 
       {burst ? <EmojiBurst key={burst.key} emoji={burst.emoji} onDone={() => setBurst(null)} /> : null}
@@ -1496,6 +1627,8 @@ export function StoryViewer({
         </>
       ) : null}
 
+      {guideOpen && !closing.current ? <StoryGestureGuide onDone={closeGuide} topInset={insets.top} bottomInset={insets.bottom} /> : null}
+
       {actionSheet ? (
         <StoryActionSheet
           title={actionSheet.title}
@@ -1527,8 +1660,10 @@ const styles = StyleSheet.create({
   closeFriendsPill: { flexDirection: 'row', alignItems: 'center', gap: 3, height: 18, paddingHorizontal: 6, borderRadius: 9, backgroundColor: CLOSE_FRIENDS_GREEN, marginLeft: 8 },
   closeFriendsText: { color: '#fff', fontSize: 11, fontWeight: '700' },
   pendingLayer: { opacity: 0 },
+  openingStill: { opacity: 0.55 },
   backdrop: { backgroundColor: '#000' },
   dismiss: { overflow: 'hidden' },
+  exitContent: { position: 'absolute', top: 0, left: 0, right: 0 },
   page: { backgroundColor: '#000', backfaceVisibility: 'hidden', overflow: 'hidden' },
   shade: { backgroundColor: '#000' },
   topScrim: { position: 'absolute', top: 0, left: 0, right: 0 },

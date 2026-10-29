@@ -1,13 +1,14 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { closedRecently, findStoryRing, registerStoryRingFinder, type ScreenRect } from '../storyReturn';
+import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Animated, {
-  Easing, cancelAnimation, runOnJS, useAnimatedStyle, useSharedValue, withRepeat, withTiming,
+  Easing, cancelAnimation, useAnimatedStyle, useSharedValue, withRepeat, withTiming, type SharedValue,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import Svg, { Circle } from 'react-native-svg';
+import Svg, { Circle, Defs, LinearGradient as SvgGradient, Stop } from 'react-native-svg';
 import { StoryCreator } from '../create/StoryCreator';
 import { dispatchStoryBack } from '../create/backStack';
 import {
@@ -21,24 +22,66 @@ import { RootState } from '../../../store';
 import { StoryViewer } from '../StoryViewerScreen';
 import { DEMO_VIEWERS, buildDemoStoryGroups } from '../demoStories';
 import { applyLiked, applySeen, openingPosition, orderTray } from '../storyNavigation';
-import { loadStorySource, storyStill } from '../storySources';
+import { loadStorySource } from '../storySources';
 import { prepareStoryOpening } from '../prepareStoryOpening';
 import { discardStoryVideo } from '../preparedStoryVideo';
 import { STORY_TRAY_QUERY_KEY, type StoryTray as StoryTrayData, type TrayGroup } from '../storyTypes';
+
+/** How long a tap waits for prepared media before opening the viewer anyway. */
+const OPEN_WITHOUT_WAITING_MS = 150;
 import { CLOSE_FRIENDS_GREEN } from '../settings/storySettings';
 
 /** Instagram's unseen-Story gradient. */
 const UNSEEN = ['#FEDA75', '#FA7E1E', '#D62976', '#962FBF', '#4F5BD5'] as const;
 const CLOSE_FRIENDS_LOADING = [CLOSE_FRIENDS_GREEN, '#78E997', '#148B42', CLOSE_FRIENDS_GREEN] as const;
-const AVATAR = 62;
 const PAGE = '#100F0D';
 
+/** Dashes in the loading ring, and how much of each slot a dash fills. */
+const LOADING_DASHES = 12;
+const DASH_FILL = 0.55;
+
+/**
+ * Opening a Story: the ring breaks into rounded dashes that spin, each a
+ * little brighter than the one behind it - a trail, as on Instagram - until
+ * the Story is ready and the ring is whole again.
+ */
+function LoadingRing({ colors }: { colors: readonly string[] }) {
+  const { ring, avatar } = useContext(TraySize);
+  const stroke = Math.max(2, (ring - avatar - 4) / 2 + 0.5);
+  const radius = ring / 2 - stroke / 2;
+  const circumference = 2 * Math.PI * radius;
+  const slot = circumference / LOADING_DASHES;
+  const id = React.useId().replace(/:/g, '');
+  return (
+    <Svg width={ring} height={ring} style={StyleSheet.absoluteFill}>
+      <Defs>
+        <SvgGradient id={id} x1="0" y1="1" x2="1" y2="0">
+          {colors.map((color, index) => <Stop key={index} offset={index / Math.max(1, colors.length - 1)} stopColor={color} />)}
+        </SvgGradient>
+      </Defs>
+      {Array.from({ length: LOADING_DASHES }, (_, index) => (
+        <Circle
+          key={index}
+          cx={ring / 2} cy={ring / 2} r={radius}
+          stroke={`url(#${id})`} strokeWidth={stroke} strokeLinecap="round" fill="none"
+          strokeDasharray={`${slot * DASH_FILL} ${circumference - slot * DASH_FILL}`}
+          strokeDashoffset={-index * slot}
+          opacity={0.18 + 0.82 * (index / (LOADING_DASHES - 1))}
+        />
+      ))}
+    </Svg>
+  );
+}
+
+const SEEN_LOADING = ['#8A8A90', '#5A5A60'] as const;
+
 function Ring({ state, loading, children }: { state: 'closeFriends' | 'unseen' | 'seen' | 'none'; loading: boolean; children: React.ReactNode }) {
+  const { styles } = useContext(TraySize);
   const spin = useSharedValue(0);
   useEffect(() => {
     if (loading) {
       spin.value = 0;
-      spin.value = withRepeat(withTiming(1, { duration: 900, easing: Easing.linear }), -1);
+      spin.value = withRepeat(withTiming(1, { duration: 1000, easing: Easing.linear }), -1);
     } else {
       cancelAnimation(spin);
       spin.value = 0;
@@ -52,8 +95,7 @@ function Ring({ state, loading, children }: { state: 'closeFriends' | 'unseen' |
     <View style={styles.ringOuter}>
       {loading ? (
         <Animated.View style={[StyleSheet.absoluteFill, ringStyle]}>
-          <LinearGradient colors={state === 'closeFriends' ? CLOSE_FRIENDS_LOADING : UNSEEN}
-            start={{ x: 0, y: 1 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} />
+          <LoadingRing colors={state === 'closeFriends' ? CLOSE_FRIENDS_LOADING : state === 'seen' ? SEEN_LOADING : UNSEEN} />
         </Animated.View>
       ) : state === 'closeFriends' ? (
         // Close Friends: a solid green ring instead of the gradient.
@@ -68,15 +110,15 @@ function Ring({ state, loading, children }: { state: 'closeFriends' | 'unseen' |
   );
 }
 
-const POSTING_RADIUS = (AVATAR + 10 - 4) / 2;
-const POSTING_CIRCUMFERENCE = 2 * Math.PI * POSTING_RADIUS;
 
 /**
  * Your avatar while stories post: a ring that fills with progress, or turns red
  * with an exclamation mark when posting failed.
  */
 function PostingRing({ posting, children }: { posting: Posting; children: React.ReactNode }) {
-  const size = AVATAR + 10;
+  const { styles, ring: size } = useContext(TraySize);
+  const POSTING_RADIUS = (size - 4) / 2;
+  const POSTING_CIRCUMFERENCE = 2 * Math.PI * POSTING_RADIUS;
   const failed = posting.status === 'failed';
   const progress = posting.status === 'completed' ? 1 : Math.max(0.04, posting.progress);
   return (
@@ -100,9 +142,10 @@ function PostingRing({ posting, children }: { posting: Posting; children: React.
 }
 
 function Avatar({ uri }: { uri?: string | null }) {
+  const { styles, avatar } = useContext(TraySize);
   return uri
     ? <Image source={{ uri }} style={styles.avatar} />
-    : <View style={[styles.avatar, styles.avatarFallback]}><Ionicons name="person" size={28} color="#8B8B90" /></View>;
+    : <View style={[styles.avatar, styles.avatarFallback]}><Ionicons name="person" size={Math.round(avatar * 0.45)} color="#8B8B90" /></View>;
 }
 
 /**
@@ -115,27 +158,46 @@ function Avatar({ uri }: { uri?: string | null }) {
  * viewer then opens in a modal over the demo, which is itself a modal and would
  * hide a navigation screen underneath it.
  */
-export function StoryTray({ demo = false, onOpenChange }: { demo?: boolean; onOpenChange?: (open: boolean) => void }) {
+export function StoryTray({ demo = false, onOpenChange, variant = 'tray', demoScenario = 'everyone', motion }: {
+  demo?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** 'header': only your own ring and "+", beside the Explore title, for when nobody else has a Story. */
+  variant?: 'tray' | 'header';
+  /** Demo only: whose Stories exist - everyone's, only yours, or none (to see each Explore layout). */
+  demoScenario?: 'everyone' | 'mine' | 'none';
+  /**
+   * Explore's row opening or closing, 0 to 1 (DiscoverScreen). While it
+   * moves, a copy of your avatar flies between the two places (DiscoverScreen
+   * draws it - a scrolling row clips anything leaving it), so your own item
+   * waits hidden; the others fade and grow in.
+   */
+  motion?: SharedValue<number>;
+}) {
+  const sizes = variant === 'header' ? HEADER_SIZES : TRAY_SIZES;
+  const styles = sizes.styles;
+  const settled = useSharedValue(1);
+  const progress = motion ?? settled;
+  const ownMotionStyle = useAnimatedStyle(() => ({ opacity: progress.value > 0.995 ? 1 : 0 }));
+  const othersMotionStyle = useAnimatedStyle(() => ({
+    opacity: Math.max(0, (progress.value - 0.3) / 0.7),
+    transform: [{ scale: 0.9 + 0.1 * progress.value }],
+  }));
   const socket = useSocket();
   const navigation = useNavigation<any>();
   const user = useSelector((state: RootState) => state.auth.user);
   const userAvatar: string | null = user?.avatarUrl ?? user?.photos?.[0]?.photoUrl ?? user?.photos?.[0] ?? null;
   const [opening, setOpening] = useState<string | null>(null);
   const openingAbort = useRef<AbortController | null>(null);
-  // The story growing out of the tapped avatar (STORY_AUDIENCE_SPEC.md,
-  // section 17.3): a short-lived overlay, entirely separate from the viewer
-  // itself, so this stays additive rather than touching its transition logic.
+  // The story grows out of the tapped avatar (STORY_AUDIENCE_SPEC.md,
+  // section 17.3): the viewer runs it, from the ring passed as openFrom.
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const avatarRefs = useRef<Map<string, View>>(new Map());
-  const growProgress = useSharedValue(0);
   useFocusEffect(useCallback(() => () => {
     if (openingAbort.current) {
       openingAbort.current.abort();
       discardStoryVideo();
     }
-    cancelAnimation(growProgress);
-  }, [growProgress]));
-  const [growth, setGrowth] = useState<{ x: number; y: number; size: number; uri: string } | null>(null);
+  }, []));
   const { data, refetch } = useQuery({
     queryKey: STORY_TRAY_QUERY_KEY,
     queryFn: async () => (await api.get('/stories/tray')).data.data as StoryTrayData,
@@ -146,8 +208,12 @@ export function StoryTray({ demo = false, onOpenChange }: { demo?: boolean; onOp
     if (!demo) void refetch();
   }, [demo, refetch]));
 
-  const [demoGroups, setDemoGroups] = useState<TrayGroup[]>(() => (demo ? buildDemoStoryGroups(userAvatar) : []));
-  const [demoViewer, setDemoViewer] = useState<{ groups: TrayGroup[]; start: number } | null>(null);
+  const [demoGroups, setDemoGroups] = useState<TrayGroup[]>(() => {
+    if (!demo || demoScenario === 'none') return [];
+    const all = buildDemoStoryGroups(userAvatar);
+    return demoScenario === 'mine' ? all.filter((group) => group.isOwn) : all;
+  });
+  const [demoViewer, setDemoViewer] = useState<{ groups: TrayGroup[]; start: number; openFrom: ScreenRect | null } | null>(null);
   // A Modal's back press goes to onRequestClose, not BackHandler, so the viewer
   // registers here to close its Activity sheet before the viewer itself closes.
   const viewerBack = useRef<(() => boolean) | null>(null);
@@ -222,7 +288,24 @@ export function StoryTray({ demo = false, onOpenChange }: { demo?: boolean; onOp
     };
   }, [demo, refetch, user?.id, socket]);
 
-  const groups = demo ? demoGroups : data?.groups ?? [];
+  // The row keeps its order while you are on Explore - a watched person stays
+  // where they were (a closing Story lands in their ring, and nothing shifts
+  // under your thumb); new Stories join at the end. The server's order (watched
+  // people last) applies when you come back to Explore from elsewhere.
+  const latestGroups = demo ? demoGroups : data?.groups ?? [];
+  const frozenOrder = useRef<string[] | null>(null);
+  const groups = React.useMemo(() => {
+    const ids = latestGroups.map((group) => group.owner.id);
+    if (!frozenOrder.current) { frozenOrder.current = ids; return latestGroups; }
+    const kept = frozenOrder.current.filter((id) => ids.includes(id));
+    const order = [...kept, ...ids.filter((id) => !kept.includes(id))];
+    frozenOrder.current = order;
+    const byId = new Map(latestGroups.map((group) => [group.owner.id, group]));
+    return order.map((id) => byId.get(id)!);
+  }, [latestGroups]);
+  useFocusEffect(useCallback(() => {
+    if (!closedRecently()) frozenOrder.current = null;
+  }, []));
   const warmKey = groups.filter(group => !group.isOwn).slice(0, 3)
     .map(group => group.stories[group.firstUnseenIndex]?.id ?? group.stories[0]?.id).filter(Boolean).join('|');
   useFocusEffect(useCallback(() => {
@@ -273,29 +356,18 @@ export function StoryTray({ demo = false, onOpenChange }: { demo?: boolean; onOp
     ]);
   };
 
-  /** Animates the grow overlay from the tapped avatar's rect to full screen, then resolves. */
-  const playGrow = (rect: { x: number; y: number; width: number; height: number }, uri: string) => new Promise<void>((resolve) => {
-    setGrowth({ x: rect.x, y: rect.y, size: rect.width, uri });
-    growProgress.value = 0;
-    growProgress.value = withTiming(1, { duration: 180, easing: Easing.out(Easing.cubic) }, () => {
-      runOnJS(resolve)();
+  // A closing Story shrinks back into its owner's ring: tell it where that is.
+  useEffect(() => registerStoryRingFinder((ownerId) => new Promise((resolve) => {
+    const ref = avatarRefs.current.get(ownerId);
+    if (!ref) { resolve(null); return; }
+    ref.measureInWindow((x, y, width, height) => {
+      // Scrolled out of the row, or not laid out: no ring to go back to.
+      const onScreen = width > 0 && x > -width / 2 && x + width / 2 < winWidth && y > -height && y < winHeight;
+      // Another person's item also holds their name under the ring: just the ring, at its top.
+      const size = height > width ? width - 4 : Math.min(width, height);
+      resolve(onScreen ? { x: x + (width - size) / 2, y: height > width ? y : y + (height - size) / 2, width: size, height: size } : null);
     });
-  });
-
-  const growOverlayStyle = useAnimatedStyle(() => {
-    if (!growth) return { opacity: 0 };
-    const progress = growProgress.value;
-    return {
-      position: 'absolute',
-      left: growth.x + (0 - growth.x) * progress,
-      top: growth.y + (0 - growth.y) * progress,
-      width: growth.size + (winWidth - growth.size) * progress,
-      height: growth.size + (winHeight - growth.size) * progress,
-      borderRadius: (growth.size / 2) * (1 - progress),
-      overflow: 'hidden',
-      backgroundColor: '#000',
-    };
-  });
+  })), [winHeight, winWidth]);
 
   const open = async (groupIndex: number) => {
     const group = groups[groupIndex];
@@ -310,32 +382,36 @@ export function StoryTray({ demo = false, onOpenChange }: { demo?: boolean; onOp
     const first = group.stories[openingPosition(groups, groupIndex).story];
     try {
       if (!first) return;
-      const source = await prepareStoryOpening(first.id, request.signal);
+      // Open at once, as Instagram does. Media that is ready in a moment opens
+      // prepared; anything slower loads in the viewer, under its own spinner,
+      // so a tap never waits on the network with nothing happening.
+      const preparing = new AbortController();
+      const stopPreparing = () => preparing.abort();
+      request.signal.addEventListener('abort', stopPreparing, { once: true });
+      const source = await Promise.race([
+        prepareStoryOpening(first.id, preparing.signal).catch(() => null),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), OPEN_WITHOUT_WAITING_MS)),
+      ]);
+      request.signal.removeEventListener('abort', stopPreparing);
+      // Not ready yet: the viewer loads it. Stopping here releases any half-made video player.
+      if (!source) preparing.abort();
       clearTimeout(loadingTimer);
       setOpening(null);
       if (request.signal.aborted) return;
 
-      // Start the opening transition only after preparing the selected media.
-      const ref = avatarRefs.current.get(group.owner.id);
-      const growUri = storyStill(source) ?? group.owner.avatarUrl ?? null;
-      if (ref && growUri) {
-        const rect = await new Promise<{ x: number; y: number; width: number; height: number } | null>((resolve) => {
-          ref.measureInWindow((x, y, width, height) => resolve({ x, y, width, height }));
-        });
-        if (request.signal.aborted) return;
-        if (rect && rect.width > 0) await playGrow(rect, growUri);
-      }
+      // The viewer grows out of this ring itself (StoryViewer openFrom): no
+      // overlay window here, which Android showed too late to be seen.
+      const openFrom = await findStoryRing(group.owner.id);
       if (request.signal.aborted) return;
-      setGrowth(null);
       // The viewer now owns the prepared buffer. Blur cleanup must not release it.
       openingAbort.current = null;
 
       if (demo) {
-        setDemoViewer({ groups, start: groupIndex });
+        setDemoViewer({ groups, start: groupIndex, openFrom });
         onOpenChange?.(true);
         return;
       }
-      navigation.navigate('StoryViewer', { groups, startGroupIndex: groupIndex });
+      navigation.navigate('StoryViewer', { groups, startGroupIndex: groupIndex, openFrom });
     } catch {
       discardStoryVideo();
       if (!request.signal.aborted) Alert.alert("Couldn't load story", 'Check your connection and try again.');
@@ -344,7 +420,6 @@ export function StoryTray({ demo = false, onOpenChange }: { demo?: boolean; onOp
       if (openingAbort.current === request) {
         openingAbort.current = null;
         setOpening(null);
-        setGrowth(null);
       }
     }
   };
@@ -366,37 +441,42 @@ export function StoryTray({ demo = false, onOpenChange }: { demo?: boolean; onOp
     navigation.navigate('CreateStory');
   };
 
-  return (
-    <>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tray} contentContainerStyle={styles.row}>
-        <View style={styles.item}>
-          <Pressable
-            ref={(node) => { if (node && user?.id) avatarRefs.current.set(user.id, node as unknown as View); }}
-            accessibilityRole="button"
-            accessibilityLabel={posting?.status === 'failed' ? "Your story couldn't post" : posting && posting.status !== 'cancelled' ? 'Posting your story' : ownIndex >= 0 ? 'Open your story' : 'Add to your story'}
-            onPress={() => {
-              if (posting?.status === 'failed') failedPosting();
-              else if (ownIndex >= 0) void open(ownIndex);
-              else if (!posting) addStory();
-            }}
-          >
-            {posting && posting.status !== 'cancelled' ? (
-              <PostingRing posting={posting}><Avatar uri={ownAvatar} /></PostingRing>
-            ) : (
-              <Ring state={ownIndex >= 0 ? 'seen' : 'none'} loading={opening !== null && opening === groups[ownIndex]?.owner.id}>
-                <Avatar uri={ownAvatar} />
-              </Ring>
-            )}
-          </Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel="Add to your story" onPress={addStory} hitSlop={8} style={styles.plus}>
-            <Ionicons name="add" size={16} color="#fff" />
-          </Pressable>
-          <Text style={styles.name} numberOfLines={1}>{posting?.status === 'failed' ? "Couldn't post" : posting && posting.status !== 'cancelled' && posting.status !== 'completed' ? 'Posting…' : 'Your story'}</Text>
-        </View>
+  // The own item is the same in both places: your story, posting progress, and "+".
+  const ownItem = (
+    <View style={styles.item}>
+      <Pressable
+        ref={(node) => { if (node && user?.id) avatarRefs.current.set(user.id, node as unknown as View); }}
+        accessibilityRole="button"
+        accessibilityLabel={posting?.status === 'failed' ? "Your story couldn't post" : posting && posting.status !== 'cancelled' ? 'Posting your story' : ownIndex >= 0 ? 'Open your story' : 'Add to your story'}
+        onPress={() => {
+          if (posting?.status === 'failed') failedPosting();
+          else if (ownIndex >= 0) void open(ownIndex);
+          else if (!posting) addStory();
+        }}
+      >
+        {posting && posting.status !== 'cancelled' ? (
+          <PostingRing posting={posting}><Avatar uri={ownAvatar} /></PostingRing>
+        ) : (
+          <Ring state={ownIndex >= 0 ? 'seen' : 'none'} loading={opening !== null && opening === groups[ownIndex]?.owner.id}>
+            <Avatar uri={ownAvatar} />
+          </Ring>
+        )}
+      </Pressable>
+      <Pressable accessibilityRole="button" accessibilityLabel="Add to your story" onPress={addStory} hitSlop={8} style={styles.plus}>
+        <Ionicons name="add" size={variant === 'header' ? 12 : 16} color="#fff" />
+      </Pressable>
+      {variant === 'tray' && <Text style={styles.name} numberOfLines={1}>{posting?.status === 'failed' ? "Couldn't post" : posting && posting.status !== 'cancelled' && posting.status !== 'completed' ? 'Posting…' : 'Your story'}</Text>}
+    </View>
+  );
 
+  return (
+    <TraySize.Provider value={sizes}>
+      {variant === 'header' ? ownItem : (
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tray} contentContainerStyle={styles.row}>
+        <Animated.View style={ownMotionStyle}>{ownItem}</Animated.View>
         {groups.map((group, index) => (group.isOwn ? null : (
+          <Animated.View key={group.owner.id} style={othersMotionStyle}>
           <Pressable
-            key={group.owner.id}
             ref={(node) => { if (node) avatarRefs.current.set(group.owner.id, node as unknown as View); }}
             accessibilityRole="button"
             accessibilityLabel={`${group.owner.name}'s story${group.closeFriendsUnseen ? ', Close Friends' : ''}${group.hasUnseen ? ', new' : ''}`}
@@ -411,16 +491,10 @@ export function StoryTray({ demo = false, onOpenChange }: { demo?: boolean; onOp
             </Ring>
             <Text style={[styles.name, !group.hasUnseen && styles.nameSeen]} numberOfLines={1}>{group.owner.name}</Text>
           </Pressable>
+          </Animated.View>
         )))}
       </ScrollView>
-
-      {growth ? (
-        <Modal visible transparent animationType="none" statusBarTranslucent>
-          <Animated.View pointerEvents="none" style={growOverlayStyle}>
-            <Image source={{ uri: growth.uri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-          </Animated.View>
-        </Modal>
-      ) : null}
+      )}
 
       {demo ? (
         <Modal
@@ -454,6 +528,7 @@ export function StoryTray({ demo = false, onOpenChange }: { demo?: boolean; onOp
               demo
               initialGroups={demoViewer.groups}
               startGroupIndex={demoViewer.start}
+              openFrom={demoViewer.openFrom}
               demoViewers={DEMO_VIEWERS}
               backRef={viewerBack}
               onClose={closeDemoViewer}
@@ -463,17 +538,19 @@ export function StoryTray({ demo = false, onOpenChange }: { demo?: boolean; onOp
           ) : null}
         </Modal>
       ) : null}
-    </>
+    </TraySize.Provider>
   );
 }
 
-const RING = AVATAR + 10;
-
-const styles = StyleSheet.create({
+/** One set of sizes per place the tray appears. */
+function makeSizes(AVATAR: number, gap: number) {
+  const RING = AVATAR + gap;
+  const badge = AVATAR > 40 ? 22 : 16;
+  const styles = StyleSheet.create({
   // A ScrollView grows to fill its column by default, which pushed the cards
   // halfway down the screen. The tray is only as tall as its avatars.
   tray: { flexGrow: 0, flexShrink: 0 },
-  row: { paddingHorizontal: 12, paddingTop: 4, paddingBottom: 8, gap: 12 },
+  row: { paddingHorizontal: 12, paddingTop: 2, paddingBottom: 6, gap: 10 },
   item: { width: RING + 4, alignItems: 'center' },
   ringOuter: { width: RING, height: RING, borderRadius: RING / 2, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   seenRing: { borderRadius: RING / 2, borderWidth: 1.5, borderColor: '#4A4A50' },
@@ -482,14 +559,21 @@ const styles = StyleSheet.create({
   avatar: { width: AVATAR, height: AVATAR, borderRadius: AVATAR / 2, backgroundColor: '#2A2A2D' },
   avatarFallback: { alignItems: 'center', justifyContent: 'center' },
   plus: {
-    position: 'absolute', top: RING - 22, right: 2, width: 22, height: 22, borderRadius: 11,
+    position: 'absolute', top: RING - badge, right: AVATAR > 40 ? 2 : -3, width: badge, height: badge, borderRadius: badge / 2,
     backgroundColor: colors.primary, borderWidth: 2, borderColor: PAGE, alignItems: 'center', justifyContent: 'center',
   },
-  name: { color: '#F0ECEA', fontSize: 12, marginTop: 5, maxWidth: RING + 4 },
+  name: { color: '#F0ECEA', fontSize: 11, marginTop: 4, maxWidth: RING + 4 },
   failedBadge: {
     position: 'absolute', right: 2, bottom: 2, width: 22, height: 22, borderRadius: 11, backgroundColor: '#ED4956',
     borderWidth: 2, borderColor: PAGE, alignItems: 'center', justifyContent: 'center',
   },
   failedBadgeText: { color: '#fff', fontWeight: '900', fontSize: 13 },
   nameSeen: { color: '#A9A6A3' },
-});
+  });
+  return { avatar: AVATAR, ring: RING, styles };
+}
+/** Explore's tray: compact faces, so the profile card keeps the screen. */
+const TRAY_SIZES = makeSizes(52, 8);
+/** Beside the Explore title, when nobody else has a Story: your ring and its "+". The face is as big as the header's 40 px buttons. */
+const HEADER_SIZES = makeSizes(40, 4);
+const TraySize = React.createContext(TRAY_SIZES);
