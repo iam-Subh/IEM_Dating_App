@@ -76,6 +76,10 @@ export function SearchScreen() {
   const phase = useRef<"closed" | "open" | "closing">("closed");
   const progress = useSharedValue(0);
   const barVisible = useSharedValue(false);
+  const navigation = useNavigation<any>();
+  // Tapping the Search tab again while on it: open search, or - already open -
+  // put the cursor back in the field and the results back at the top.
+  const [retap, setRetap] = useState(0);
 
   useEffect(() => () => cancelAnimation(progress), [progress]);
   useEffect(() => {
@@ -127,6 +131,15 @@ export function SearchScreen() {
       if (finished) runOnJS(finishOpen)();
     });
   };
+
+  const openSearchRef = useRef(openSearch);
+  openSearchRef.current = openSearch;
+  useEffect(() => navigation.addListener("tabPress", () => {
+    // From another tab this is just arriving here.
+    if (!navigation.isFocused()) return;
+    if (phase.current === "open") setRetap((value) => value + 1);
+    else if (phase.current === "closed") openSearchRef.current();
+  }), [navigation]);
 
   const fieldMeasured = (frame: SearchBarFrame) => {
     if (frame.width <= 0 || frame.height <= 0) return;
@@ -187,7 +200,7 @@ export function SearchScreen() {
         }
       />
       </Animated.View>
-      <SearchPanel active={open} onClose={closeSearch} onFieldLayout={fieldMeasured} ready={ready} progress={progress} />
+      <SearchPanel active={open} onClose={closeSearch} onFieldLayout={fieldMeasured} ready={ready} progress={progress} retap={retap} />
       {startFrame && (
         <MovingSearchBar startFrame={startFrame} endFrame={endFrame} progress={progress} value={transitionQuery} visible={barVisible} />
       )}
@@ -250,12 +263,15 @@ function SearchPanel({
   onFieldLayout,
   ready,
   progress,
+  retap,
 }: {
   active: boolean;
   onClose: (query: string) => void;
   onFieldLayout: (frame: SearchBarFrame) => void;
   ready: boolean;
   progress: SharedValue<number>;
+  /** Goes up each time the Search tab is tapped again while search is open. */
+  retap: number;
 }) {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
@@ -286,6 +302,12 @@ function SearchPanel({
     const frame = requestAnimationFrame(() => input.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [ready]);
+  const list = useRef<FlatList<SearchPerson>>(null);
+  useEffect(() => {
+    if (!retap || !ready) return;
+    list.current?.scrollToOffset({ offset: 0, animated: true });
+    input.current?.focus();
+  }, [retap, ready]);
 
   // Demo state lives only here and is gone when the panel closes.
   const [demoFollows, setDemoFollows] = useState<Record<string, FollowStatus>>({});
@@ -374,6 +396,7 @@ function SearchPanel({
   // opening it must not re-render this screen and the profile (RoseSheetHost).
   const roseHost = useRef<RoseSheetHostHandle<ExploreProfile>>(null);
   const [roseConfirmation, setRoseConfirmation] = useState<RoseConfirmation | null>(null);
+  const matchedRose = useRef<{card: ExploreProfile; matchId?: string} | null>(null);
   const roseSending = useRef(false);
   const rosePreview = useRef<string | null>(null);
   const { balance: roseBalance, send: sendRose } = useRoses();
@@ -382,7 +405,7 @@ function SearchPanel({
     Keyboard.dismiss();
     setNotice(null);
     setSocial(person);
-    saveRecent((list) => withRecent(list, { kind: "person", person }));
+    saveRecent((list) => withRecent(list, { kind: "person", person: { ...person, mutualFollows: undefined } }));
   };
 
   /** One follow state, everywhere this person is on screen. */
@@ -502,12 +525,15 @@ function SearchPanel({
     Keyboard.dismiss();
     if (kind === "rose") {
       // A late success still updates the result, but cannot animate over a different profile.
-      if (datingId.current === card.id) setRoseConfirmation({ name: card.name, matched });
+      if (datingId.current === card.id) {
+        matchedRose.current = matched ? {card, matchId} : null;
+        setRoseConfirmation({ name: card.name, matched });
+      }
     } else setDating(null);
     // Shown at once on the sheet and in every list; the server's own answer follows.
     patchPerson(card.id, { dating: state });
     if (!demo) void refreshPerson(card.id);
-    if (matched && kind !== "rose") Alert.alert("It's a match!", `You and ${card.name} liked each other.`);
+    if (matched && kind !== "rose") navigation.navigate('MatchCelebration', {name: card.name, userId: card.id, photo: card.primaryPhoto ?? card.photos[0], matchId, demo});
     else setNotice(null);
   };
 
@@ -768,7 +794,7 @@ function SearchPanel({
       onPress={() => openPerson(person)}
       style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
       accessibilityRole="button"
-      accessibilityLabel={`${person.name}${person.blueBadge ? ", verified" : ""}${person.dating ? `, ${DECISION_APPEARANCE[person.dating.kind].label}` : ""}${person.followsYou ? ", follows you" : ""}`}
+      accessibilityLabel={`${person.name}${person.blueBadge ? ", verified" : ""}${person.dating ? `, ${DECISION_APPEARANCE[person.dating.kind].label}` : ""}${person.followsYou ? ", follows you" : ""}${!onRemove && person.mutualFollows ? `, you both follow ${person.mutualFollows} ${person.mutualFollows === 1 ? "person" : "people"}` : ""}`}
     >
       <PersonAvatar person={person} size={48} background="#100F0D" />
       <View style={styles.rowBody}>
@@ -788,6 +814,12 @@ function SearchPanel({
             {person.dating && <DecisionMark state={person.dating} />}
             {person.followsYou && <Text style={styles.resultFollows}>Follows you</Text>}
           </View>
+        )}
+        {/* Fresh from this search only - a saved recent would show a stale number. */}
+        {!onRemove && !!person.mutualFollows && (
+          <Text style={styles.resultMutual} numberOfLines={1}>
+            You both follow {person.mutualFollows} {person.mutualFollows === 1 ? "person" : "people"}
+          </Text>
         )}
       </View>
       {onRemove ? (
@@ -864,33 +896,46 @@ function SearchPanel({
     </View>
   );
 
+  // A matching interest comes first, as chips, so it is seen without scrolling.
+  const interestChips = matchedInterests.length > 0 ? (
+    <View style={styles.interestBlock}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.interestChips}>
+        {matchedInterests.map((item) => (
+          <Pressable
+            key={item.id}
+            onPress={() => openInterest(item.id)}
+            style={({ pressed }) => [styles.interestChip, pressed && styles.rowPressed]}
+            accessibilityRole="button"
+            accessibilityLabel={`Explore people into ${item.label}`}
+          >
+            <Ionicons name="sparkles-outline" size={15} color={colors.primaryLight} />
+            <Text style={styles.interestChipText}>{item.label}</Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+      <Text style={styles.interestHint}>Tap an interest to explore people into it.</Text>
+    </View>
+  ) : null;
+
+  // While the first results load: rows in their place, not a blank page.
+  const placeholderRows = (
+    <View accessible accessibilityLabel="Searching">
+      {[0, 1, 2, 3].map((index) => (
+        <View key={index} style={styles.row}>
+          <View style={styles.skeletonAvatar} />
+          <View style={styles.rowBody}>
+            <View style={[styles.skeletonLine, { width: 140 - index * 12 }]} />
+            <View style={[styles.skeletonLine, styles.skeletonLineShort]} />
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+
   const resultsFooter = (
     <View>
       {status === "ok" && result?.truncated && (
         <Text style={styles.footerText}>Showing the first 30. Keep typing to narrow it down.</Text>
-      )}
-      {matchedInterests.length > 0 && (
-        <>
-          <Text style={[styles.sectionTitle, styles.sectionPad]}>Interests</Text>
-          {matchedInterests.map((item) => (
-            <Pressable
-              key={item.id}
-              onPress={() => openInterest(item.id)}
-              style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-              accessibilityRole="button"
-              accessibilityLabel={`Explore people into ${item.label}`}
-            >
-              <View style={styles.queryIcon}>
-                <Ionicons name="sparkles-outline" size={19} color={colors.primaryLight} />
-              </View>
-              <View style={styles.rowBody}>
-                <Text style={styles.name}>{item.label}</Text>
-                <Text style={styles.meta}>Explore people into this</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={colors.text.secondary} />
-            </Pressable>
-          ))}
-        </>
       )}
     </View>
   );
@@ -1006,6 +1051,7 @@ function SearchPanel({
         {/* Reminder 9 (GOOGLE_SIGNUP_PLAN.md 4): before verifying, Search reaches your campus only. */}
         <UnverifiedNudge art="search" icon="search-outline" text="Verify your college to search every campus." dismissKey="search-campus" />
         <FlatList
+          ref={list}
           data={showZero || status === "error" ? [] : people}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => personRow(item)}
@@ -1024,11 +1070,24 @@ function SearchPanel({
                 </Pressable>
               </View>
             ) : people.length > 0 ? (
-              <Text style={[styles.sectionTitle, styles.sectionPad]}>People</Text>
+              <View>
+                {interestChips}
+                <Text style={[styles.sectionTitle, styles.sectionPad]}>People</Text>
+              </View>
             ) : status === "ok" ? (
               // Never "hidden" or "not found": absence is ambiguous by design (10).
-              <View style={styles.empty}>
-                <Text style={styles.emptyText}>No one at your college matches that.</Text>
+              <View>
+                {interestChips}
+                <View style={styles.empty}>
+                  <View style={styles.emptyIcon}><Ionicons name="search" size={26} color={colors.text.secondary} /></View>
+                  <Text style={styles.emptyTitle}>No one at your college matches that</Text>
+                  <Text style={styles.emptyText}>Check the spelling, or try just their first name.</Text>
+                </View>
+              </View>
+            ) : status === "loading" ? (
+              <View>
+                {interestChips}
+                {placeholderRows}
               </View>
             ) : null
           }
@@ -1075,6 +1134,9 @@ function SearchPanel({
             setOpening(false);
             setRoseConfirmation(null);
             rosePreview.current = null;
+            const result = matchedRose.current;
+            matchedRose.current = null;
+            if (result) navigation.navigate('MatchCelebration', {name: result.card.name, userId: result.card.id, photo: result.card.primaryPhoto ?? result.card.photos[0], matchId: result.matchId, demo});
           }}
           onLike={() => like(dating)}
           onRose={() => roseHost.current?.open(dating)}
@@ -1474,7 +1536,18 @@ const styles = StyleSheet.create({
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 20, paddingTop: 4 },
   chip: { paddingHorizontal: 16, paddingVertical: 12, borderRadius: 24, backgroundColor: "#242426" },
   chipText: { color: "#F2F2F5", fontSize: 14, fontWeight: "500" },
-  privacyNote: { color: colors.text.secondary, fontSize: 12, paddingHorizontal: 20, paddingTop: 20 },
+  privacyNote: { color: "#89858B", fontSize: 12, lineHeight: 17, textAlign: "center", paddingHorizontal: 32, paddingTop: 24 },
+  interestBlock: { paddingTop: 12 },
+  resultMutual: { color: "#A9A5A2", fontSize: 12, marginTop: 3 },
+  interestChips: { paddingHorizontal: 20, gap: 8 },
+  interestChip: { flexDirection: "row", alignItems: "center", gap: 6, height: 36, paddingHorizontal: 14, borderRadius: 18, backgroundColor: "#232323" },
+  interestChipText: { color: "#FFFFFF", fontSize: 14, fontWeight: "600" },
+  interestHint: { color: "#89858B", fontSize: 12, paddingHorizontal: 20, paddingTop: 8 },
+  skeletonAvatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#1E1D1C" },
+  skeletonLine: { height: 12, borderRadius: 6, backgroundColor: "#1E1D1C" },
+  skeletonLineShort: { width: 90, height: 10, marginTop: 8 },
+  emptyIcon: { width: 64, height: 64, borderRadius: 32, backgroundColor: "#1E1D1C", alignItems: "center", justifyContent: "center" },
+  emptyTitle: { color: "#FFFFFF", fontSize: 18, fontWeight: "700", textAlign: "center" },
   privacyNoteCentered: { textAlign: "center", paddingHorizontal: 40 },
   prompt: { alignItems: "center", paddingTop: 72, paddingHorizontal: 40, gap: 8 },
   promptIcon: {

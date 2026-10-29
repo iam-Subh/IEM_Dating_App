@@ -148,6 +148,8 @@ const cohort: DemoPerson[] = FIRST.map((first, index) => ({
   campus: index % 2 ? "Gurukul" : "Salt Lake",
   clubs: [["Music"], ["Robotics", "Quiz"], [], ["Dance", "Photography"]][index % 4],
   followsYou: index % 7 === 0,
+  // Some share people you follow: "You both follow N people".
+  mutualFollows: index % 3 === 0 ? 0 : 1 + ((index * 5) % 9),
   // Every third has Stories off: no social profile, so no counts.
   followersCount: index % 3 === 2 ? null : 20 + ((index * 37) % 180),
   followingCount: index % 3 === 2 ? null : 30 + ((index * 53) % 160),
@@ -156,7 +158,7 @@ const cohort: DemoPerson[] = FIRST.map((first, index) => ({
 export const DEMO_PEOPLE: DemoPerson[] = [
   fromCard("aanya"),
   // You follow each other: "Following", with "Follows you" beside it.
-  fromCard("rohan", { followStatus: "accepted", followsMe: true, followsYou: true }),
+  fromCard("rohan", { followStatus: "accepted", followsMe: true, followsYou: true, mutualFollows: 4 }),
   fromCard("maya", { followsMe: true, followsYou: true }),
   fromCard("rupsa"),
   fromCard("subh", { isVerified: true, followsMe: true, followsYou: true }),

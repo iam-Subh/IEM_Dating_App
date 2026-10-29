@@ -57,6 +57,11 @@ export type SearchPerson = {
   /** They follow you (accepted): "Follows you", and "Follow back" on the button. */
   followsYou: boolean;
   /**
+   * How many people you follow also follow them (both accepted): "You both
+   * follow 3 people". A number only - never who - and only in search results.
+   */
+  mutualFollows?: number;
+  /**
    * Accepted followers and following - only for someone with Stories on, who
    * has joined the social layer, and who has not turned off "Show follower
    * counts". Null otherwise, never 0, so a hidden count does not read as an
@@ -153,7 +158,7 @@ export class SearchPeopleService {
 
     const truncated = rows.length > cap;
     if (!searcher.verified) await this.requireUnverifiedAllowance(viewerId, rows.slice(0, cap).map((row) => row.id));
-    const people = await this.cards(viewerId, rows.slice(0, cap));
+    const people = await this.withMutualFollows(viewerId, await this.cards(viewerId, rows.slice(0, cap)));
     await this.countDistinct(viewerId, people.map((person) => person.id));
     return { people, truncated };
   }
@@ -179,6 +184,22 @@ export class SearchPeopleService {
    * college and campus they chose - Search then reaches that campus only,
    * as Discover does (GOOGLE_SIGNUP_PLAN.md 2.1). Null: nowhere to search.
    */
+  /** Each result's count of people you follow who follow them too. */
+  private static async withMutualFollows(viewerId: string, people: SearchPerson[]) {
+    if (!people.length) return people;
+    const following = (await prisma.follow.findMany({
+      where: { followerId: viewerId, status: 'accepted' }, select: { followeeId: true },
+    })).map((row) => row.followeeId);
+    if (!following.length) return people.map((person) => ({ ...person, mutualFollows: 0 }));
+    const counts = await prisma.follow.groupBy({
+      by: ['followeeId'],
+      where: { status: 'accepted', followerId: { in: following }, followeeId: { in: people.map((person) => person.id) } },
+      _count: { _all: true },
+    });
+    const countOf = new Map(counts.map((row) => [row.followeeId, row._count._all]));
+    return people.map((person) => ({ ...person, mutualFollows: countOf.get(person.id) ?? 0 }));
+  }
+
   private static async searcher(viewerId: string, now: Date): Promise<Searcher | null> {
     const [me, membership] = await Promise.all([
       prisma.user.findUnique({ where: { id: viewerId }, select: { claimedInstitutionId: true, campusId: true } }),

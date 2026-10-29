@@ -11,6 +11,8 @@ export type SearchPerson = {
   followStatus: "pending" | "accepted" | null;
   /** They follow you. Optional: recent searches saved before this existed lack it. */
   followsYou?: boolean;
+  /** People you follow who follow them too: a number only (search results, not recents). */
+  mutualFollows?: number;
   /** Only for someone with Stories on (their social profile exists); null otherwise. */
   followersCount?: number | null;
   followingCount?: number | null;
