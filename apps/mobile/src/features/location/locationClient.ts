@@ -252,6 +252,7 @@ export function onLocationSessionReset(listener: () => void) {
 export async function refreshIfDue(options: {
   updatedAt: string | null;
   permission: PermissionState;
+  onLocate?: () => void;
 }): Promise<LocationWriteResult | "skipped"> {
   if (options.permission.status !== "granted") return "skipped";
   const age = options.updatedAt ? Date.now() - Date.parse(options.updatedAt) : Infinity;
@@ -263,6 +264,7 @@ export async function refreshIfDue(options: {
   ) {
     return "skipped";
   }
+  options.onLocate?.();
   return sendPosition(await readPositionForWrite(), options.permission.accuracy);
 }
 

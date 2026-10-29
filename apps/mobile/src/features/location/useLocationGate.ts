@@ -58,10 +58,28 @@ onLocationSessionReset(() => {
   dismissedUntilNextOpen = false;
 });
 
-export function useLocationGate(enabled: boolean, onLocationChanged: () => void) {
+export function useLocationGate(enabled: boolean, onLocationChanged: (status?: LocationStatus) => void) {
   const [status, setStatus] = useState<LocationStatus | null>(null);
   const [permission, setPermission] = useState<PermissionState | null>(null);
   const [busy, setBusy] = useState(false);
+  const [locating, setLocating] = useState(false);
+  const locatingCount = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {mounted.current = false;};
+  }, []);
+  const beginLocating = useCallback(() => {
+    locatingCount.current++;
+    if (mounted.current) setLocating(true);
+    let finished = false;
+    return () => {
+      if (finished) return;
+      finished = true;
+      locatingCount.current--;
+      if (mounted.current) setLocating(locatingCount.current > 0);
+    };
+  }, []);
   const [error, setError] = useState("");
   const [dismissed, setDismissed] = useState(dismissedUntilNextOpen);
   const changed = useRef(onLocationChanged);
@@ -75,22 +93,29 @@ export function useLocationGate(enabled: boolean, onLocationChanged: () => void)
   }, []);
 
   /** Checks quietly, refreshes when due, never shows a system dialog. */
-  const check = useCallback(async () => {
+  const check = useCallback(async (notify = true) => {
     if (!enabled) return;
+    let finishLocating: (() => void) | undefined;
     try {
       const [current, perm] = await Promise.all([loadStatus(), readPermission()]);
       setPermission(perm);
-      if (current.mode !== "distance" || current.source === "place") return;
-      const result = await refreshIfDue({ updatedAt: current.updatedAt, permission: perm });
+      if (current.mode !== "distance" || current.source === "place") return current;
+      const result = await refreshIfDue({ updatedAt: current.updatedAt, permission: perm,
+        onLocate: () => {finishLocating = beginLocating();} });
       if (result !== "skipped") {
         const after = await loadStatus();
-        if (result.changed || after.fresh !== current.fresh) changed.current();
+        if (notify && (result.changed || after.fresh !== current.fresh)) changed.current(after);
+        setError("");
+        return after;
       }
       setError("");
+      return current;
     } catch (cause) {
       setError(locationErrorMessage(cause));
+    } finally {
+      finishLocating?.();
     }
-  }, [enabled, loadStatus]);
+  }, [enabled, loadStatus, beginLocating]);
 
   useEffect(() => {
     void check();
@@ -106,7 +131,7 @@ export function useLocationGate(enabled: boolean, onLocationChanged: () => void)
     // again now, and reload the deck, which the new location may change.
     const offSettings = onLocationSettingsChanged(() => {
       if (!enabled) return;
-      void check().then(() => changed.current());
+      void check(false).then(next => {if (next) changed.current(next);});
     });
     return () => {
       listener.remove();
@@ -134,36 +159,40 @@ export function useLocationGate(enabled: boolean, onLocationChanged: () => void)
   const turnOn = useCallback(async () => {
     setBusy(true);
     setError("");
+    let finishLocating: (() => void) | undefined;
     try {
       const perm = await requestPermission();
       setPermission(perm);
       if (perm.status !== "granted") return;
+      finishLocating = beginLocating();
       await sendCurrentLocation(perm.accuracy);
-      await loadStatus();
-      changed.current();
+      changed.current(await loadStatus());
     } catch (cause) {
       setError(locationErrorMessage(cause));
     } finally {
+      finishLocating?.();
       setBusy(false);
     }
-  }, [loadStatus]);
+  }, [loadStatus, beginLocating]);
 
   const retry = useCallback(async () => {
     setBusy(true);
     setError("");
+    let finishLocating: (() => void) | undefined;
     try {
       const perm = await readPermission();
       setPermission(perm);
       if (perm.status !== "granted") return;
+      finishLocating = beginLocating();
       await sendCurrentLocation(perm.accuracy);
-      await loadStatus();
-      changed.current();
+      changed.current(await loadStatus());
     } catch (cause) {
       setError(locationErrorMessage(cause));
     } finally {
+      finishLocating?.();
       setBusy(false);
     }
-  }, [loadStatus]);
+  }, [loadStatus, beginLocating]);
 
   /**
    * "Show me here": turns off hiding at the place the phone is in, then sends
@@ -173,28 +202,31 @@ export function useLocationGate(enabled: boolean, onLocationChanged: () => void)
   const showHere = useCallback(async (placeId: string | null) => {
     setBusy(true);
     setError("");
+    let finishLocating: (() => void) | undefined;
     try {
       if (placeId) await api.patch(`/profile/location/places/${placeId}`, { hideHere: false });
       const perm = await readPermission();
       setPermission(perm);
-      if (perm.status === "granted") await sendCurrentLocation(perm.accuracy);
-      await loadStatus();
-      changed.current();
+      if (perm.status === "granted") {
+        finishLocating = beginLocating();
+        await sendCurrentLocation(perm.accuracy);
+      }
+      changed.current(await loadStatus());
     } catch (cause) {
       setError(locationErrorMessage(cause));
       await loadStatus().catch(() => undefined);
     } finally {
+      finishLocating?.();
       setBusy(false);
     }
-  }, [loadStatus]);
+  }, [loadStatus, beginLocating]);
 
   const usePlace = useCallback(async (placeId: string) => {
     setBusy(true);
     setError("");
     try {
       await api.put("/profile/location/source", { placeId });
-      await loadStatus();
-      changed.current();
+      changed.current(await loadStatus());
     } catch (cause: any) {
       setError(cause?.response?.data?.message ?? "Could not use that place. Try again.");
     } finally {
@@ -216,8 +248,7 @@ export function useLocationGate(enabled: boolean, onLocationChanged: () => void)
         discoveryMode: "college",
         distancePreference: current.distancePreference ?? 25,
       });
-      await loadStatus();
-      changed.current();
+      changed.current(await loadStatus());
     } catch (cause: any) {
       setError(cause?.response?.data?.message ?? "Could not switch to college mode. Try again.");
     } finally {
@@ -235,6 +266,7 @@ export function useLocationGate(enabled: boolean, onLocationChanged: () => void)
     status,
     permission,
     busy,
+    locating,
     error,
     /** "Not now" is only offered when the stored location still works. */
     canDismiss: !!status?.fresh && !!status?.cell,

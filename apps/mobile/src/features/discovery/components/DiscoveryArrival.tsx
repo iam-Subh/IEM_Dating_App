@@ -55,14 +55,14 @@ function ShuffleCard({index, front, profile, progress, reveal, frame, width, hei
   </Animated.View>;
 }
 
-export function DiscoveryArrival({preview = false}: {preview?: boolean}) {
+export function DiscoveryArrival({preview = false, revealToDeck = true}: {preview?: boolean; revealToDeck?: boolean}) {
   const state = useSyncExternalStore(subscribeDiscoveryArrival, getDiscoveryArrival);
   useEffect(() => () => {
     const current = getDiscoveryArrival();
     if (current.active && !!current.replay === preview) finishDiscoveryArrival();
   }, [preview]);
   return state.active && !!state.replay === preview
-    ? <ArrivalContent status={state.status} loop={preview} profiles={state.profiles ?? EMPTY_PROFILES} frame={state.frame}/>
+    ? <ArrivalContent status={state.status} loop={preview} profiles={state.profiles ?? EMPTY_PROFILES} frame={revealToDeck ? state.frame : undefined}/>
     : null;
 }
 
@@ -143,7 +143,6 @@ function ArrivalContent({status, loop, profiles, frame}: {
   const disappearing = useAnimatedStyle(() => ({opacity: 1 - reveal.value}));
   const heading = useAnimatedStyle(() => ({color: interpolateColor(tone.value, [0, 1], ['#352335', '#FAF0F4'])}));
   const detail = useAnimatedStyle(() => ({color: interpolateColor(tone.value, [0, 1], ['#715365', '#C1ADB7'])}));
-  const brand = useAnimatedStyle(() => ({color: interpolateColor(tone.value, [0, 1], ['#712C48', '#E6A5BD'])}));
   const caption = useAnimatedStyle(() => {
     const phase = Number.isFinite(progress.value) ? progress.value - Math.floor(progress.value) : .5;
     return {opacity: (1 - reveal.value) * (reduced || shuffleDone || status === 'error' ? 1 : Math.max(0, Math.min(1, phase / .1, (1 - phase) / .1)))};
@@ -154,12 +153,11 @@ function ArrivalContent({status, loop, profiles, frame}: {
     <StatusBar barStyle={lightText ? 'light-content' : 'dark-content'}/>
     <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, surface]}/>
     <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, disappearing]}><AmbientLight/></Animated.View>
-    <Animated.View style={[s.header, {top: insets.top + 16}, disappearing]}>
-      <Animated.Text style={[s.brand, brand]}>Explore</Animated.Text>
-      {loop ? <Pressable accessibilityRole="button" accessibilityLabel="Close animation preview" onPress={finishDiscoveryArrival} style={s.close}>
+    {loop && <Animated.View style={[s.header, {top: insets.top + 16}, disappearing]}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Close animation preview" onPress={finishDiscoveryArrival} style={s.close}>
         <Ionicons name="close" size={20} color={lightText ? '#FAF0F4' : '#712C48'}/>
-      </Pressable> : <Animated.Text style={[s.headerLabel, detail]}>FOR YOU</Animated.Text>}
-    </Animated.View>
+      </Pressable>
+    </Animated.View>}
     {loop && <Animated.Text style={[s.previewLabel, {top: insets.top + 63}, detail, disappearing]}>Animation preview · sample profiles</Animated.Text>}
     {[2, 1, 0].map(index => <ShuffleCard key={index} index={index} front={front} profile={profiles[index]} progress={progress} reveal={reveal}
       frame={target} width={cardWidth} height={cardHeight} x={cardX} y={cardY} onPrepared={uri => {if (uri === firstPhotoUri) setPreparedUri(uri);}}/>)}
@@ -176,9 +174,7 @@ function ArrivalContent({status, loop, profiles, frame}: {
 
 const s = StyleSheet.create({
   page: {zIndex: 100, elevation: 30, overflow: 'hidden'},
-  header: {position: 'absolute', left: 22, right: 22, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', height: 40},
-  brand: {fontFamily: 'DMSans_700Bold', fontSize: 26, lineHeight: 34},
-  headerLabel: {fontFamily: 'DMSans_500Medium', fontSize: 10, letterSpacing: 2},
+  header: {position: 'absolute', left: 22, right: 22, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', height: 40},
   close: {width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#B17C9420'},
   previewLabel: {position: 'absolute', left: 22, fontFamily: 'DMSans_400Regular', fontSize: 10, lineHeight: 16},
   card: {position: 'absolute', overflow: 'hidden', backgroundColor: '#342830', borderWidth: 1, borderColor: '#EAC3D138', elevation: 0, shadowColor: '#000', shadowOffset: {width: 0, height: 12}, shadowOpacity: .32, shadowRadius: 18},

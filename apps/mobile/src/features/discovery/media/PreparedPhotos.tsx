@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useCallback, useState } from "react";
+import { Shimmer } from "../../../components/Shimmer";
 import { StyleSheet, View } from "react-native";
 import Animated, { useAnimatedStyle, type SharedValue } from "react-native-reanimated";
 
@@ -71,8 +72,22 @@ export function PreparedPhotos({
     return neighbours ? forward <= 2 || backward <= 1 : forward === 0;
   });
   const mountedIndexes = indexOf ? mounted.map((uri) => indexOf[uri] ?? -1) : [];
+  // The photo on show has not arrived yet: a shimmer in its place (under it,
+  // so the photo simply covers it the moment it decodes).
+  const [loaded, setLoaded] = useState<ReadonlySet<string>>(() => new Set());
+  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
+  const handleLoad = useCallback((uri: string) => {
+    setLoaded((current) => (current.has(uri) ? current : new Set(current).add(uri)));
+    onLoad?.(uri);
+  }, [onLoad]);
+  const handleError = useCallback((uri: string) => {
+    setFailed((current) => (current.has(uri) ? current : new Set(current).add(uri)));
+    onError?.(uri);
+  }, [onError]);
+  const waiting = !!selectedUri && !loaded.has(selectedUri) && !failed.has(selectedUri);
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      {waiting ? <Shimmer style={StyleSheet.absoluteFill} /> : null}
       {mounted.map((uri) => (
         <PreparedPhoto
           key={uri}
@@ -81,8 +96,8 @@ export function PreparedPhotos({
           mediaIndex={indexOf?.[uri] ?? -1}
           mountedIndexes={mountedIndexes}
           selectedIndex={indexOf ? selectedIndex : undefined}
-          onLoad={onLoad}
-          onError={onError}
+          onLoad={handleLoad}
+          onError={handleError}
         />
       ))}
     </View>

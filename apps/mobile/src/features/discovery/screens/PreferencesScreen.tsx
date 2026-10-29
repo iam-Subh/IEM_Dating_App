@@ -1,9 +1,10 @@
+import { cancelDiscardRequest, createDiscardRequest } from '../../../components/discardChangesRequests';
 import { UnverifiedNudge } from '../../verification/VerifyNudge';
 import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { ProfileFieldIcon } from '../../../components/ProfileFieldIcon';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../../../store';
@@ -166,6 +167,22 @@ export function PreferencesScreen() {
   }, [navigation]);
   const signature = (value: Draft) => JSON.stringify({ ...value, show: [...value.show].sort(), criteria: Object.fromEntries(Object.entries(value.criteria).map(([key, entry]) => [key, { ...entry, values: [...entry.values].sort() }])) });
   const hasChanges = signature(draft) !== signature(baseline);
+  // Leaving with changes not saved (Back, the gesture, the header arrow): ask
+  // first - "Discard changes?", the same sheet the profile editors use. A
+  // successful Done leaves freely (`leaving`).
+  const [leaving, setLeaving] = useState(false);
+  const discardRequest = useRef<string | null>(null);
+  usePreventRemove(hasChanges && !saving && !leaving, ({ data }) => {
+    if (discardRequest.current) return;
+    const requestId = createDiscardRequest((discard) => {
+      discardRequest.current = null;
+      if (discard) navigation.dispatch(data.action);
+    });
+    discardRequest.current = requestId;
+    navigation.navigate('DiscardChanges', { requestId });
+  });
+  useEffect(() => () => { if (discardRequest.current) cancelDiscardRequest(discardRequest.current); }, []);
+  useEffect(() => { if (leaving) navigation.goBack(); }, [leaving, navigation]);
   const requiredCount = Object.values(draft.criteria).filter((selection) => selection.required && selection.values.length > 0).length;
 
   // Live: about how many people these choices would show, as they change.
@@ -263,7 +280,7 @@ export function PreferencesScreen() {
         expandRadius: saved.flexibleArea,
       }));
       notifyPreferencesChanged();
-      navigation.goBack();
+      setLeaving(true);
     } catch (cause: any) {
       const code = cause?.response?.data?.code;
       const message = cause?.response?.data?.message ?? 'Your preferences could not be saved. Check your connection and try again.';
