@@ -15,10 +15,13 @@ router.get('/likes-you/summary', discoveryRateLimiter, DiscoverController.likesS
 router.post('/likes-you/seen', discoveryRateLimiter, DiscoverController.likesSeen);
 router.get('/roses', discoveryRateLimiter, DiscoverController.roses);
 router.get('/standouts', discoveryRateLimiter, DiscoverController.standouts);
+router.get('/standouts/learning', discoveryRateLimiter, DiscoverController.standoutsLearning);
 router.post('/standouts/:userId/hide', discoveryRateLimiter, DiscoverController.hideStandout);
 router.get('/rewind', discoveryRateLimiter, DiscoverController.rewindStatus);
 router.post('/rewind', swipeRateLimiter, DiscoverController.rewind);
 router.post('/swipe', swipeRateLimiter, DiscoverController.swipe);
+// Checks a comment while it is written, so a refusal shows before the card leaves.
+router.post('/comment-check', swipeRateLimiter, DiscoverController.checkComment);
 router.post('/visible', visibilityRateLimiter, DiscoverController.visible);
 // The map (LOCATION_SPEC.md 9): counts by campus, spot and area; never who is where.
 router.get('/map', discoveryRateLimiter, MapController.map);

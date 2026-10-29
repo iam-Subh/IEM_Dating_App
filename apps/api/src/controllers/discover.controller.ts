@@ -6,6 +6,7 @@ import { LIKES_SORTS, LikesService } from "../services/likes.service";
 import { ROSE_COMMENT_MAX, RoseService } from "../services/rose.service";
 import { StandoutsService } from "../services/standouts.service";
 import { RewindService } from "../services/rewind.service";
+import { LIKE_COMMENT_MAX, LikeCommentService } from "../services/like-comment.service";
 import { HttpError } from "../utils/httpError";
 import { z } from "zod";
 import { logger } from "../utils/logger";
@@ -58,16 +59,36 @@ export class DiscoverController {
           // A Rose rides along with the Like, spent in the same transaction.
           rose: z.boolean().optional(),
           comment: z.string().trim().max(ROSE_COMMENT_MAX).optional(),
+          // A comment about one photo or the bio (like-comment.service.ts).
+          about: z
+            .discriminatedUnion("kind", [
+              z.object({ kind: z.literal("photo"), photoUrl: z.string().url().max(1000) }),
+              z.object({ kind: z.literal("bio") }),
+            ])
+            .optional(),
         })
         .safeParse(req.body);
       if (!parsed.success) throw new HttpError(400, "Invalid swipe");
+      const comment = parsed.data.comment || null;
       const data = await SwipeService.perform(
         (req as any).user.sub,
         parsed.data.targetId,
         parsed.data.action,
-        parsed.data.rose ? { comment: parsed.data.comment ?? null } : undefined,
+        parsed.data.rose ? { comment } : undefined,
+        parsed.data.about && comment ? { comment, about: parsed.data.about } : undefined,
       );
       res.status(200).json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  }
+  /** Would this comment be sent? The same check as the swipe, nothing written. */
+  static async checkComment(req: Request, res: Response, next: NextFunction) {
+    try {
+      const parsed = z.object({ comment: z.string().trim().min(1).max(LIKE_COMMENT_MAX) }).safeParse(req.body);
+      if (!parsed.success) throw new HttpError(400, "Write a comment first", "INVALID_COMMENT");
+      LikeCommentService.check(parsed.data.comment);
+      res.status(200).json({ success: true, data: { ok: true } });
     } catch (error) {
       next(error);
     }
@@ -149,6 +170,16 @@ export class DiscoverController {
   static async standouts(req: Request, res: Response, next: NextFunction) {
     try {
       const data = await StandoutsService.today((req as any).user.sub);
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /** "Learning your type": swipes so far, for the Explore pill and the ring on the Standouts icon. */
+  static async standoutsLearning(req: Request, res: Response, next: NextFunction) {
+    try {
+      const data = await StandoutsService.learning((req as any).user.sub);
       res.status(200).json({ success: true, data });
     } catch (error) {
       next(error);

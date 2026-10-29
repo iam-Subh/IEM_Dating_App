@@ -1,0 +1,30 @@
+OUTPUT: standouts-growing-bloom.png
+Generator: OpenAI built-in image_gen.imagegen
+Transparent background: true
+Selected generated prompt:
+Edit image 1 into stage 3, the ALMOST BLOOMING version of the SAME growing plant sequence. Image 1 (three closed buds) is the edit target. Image 2 (sprouts) confirms the exact original pot. Image 3 (hand-held bouquet) is a style reference and shows the eventual fully open shapes; DO NOT include the hand or fully open flowers. Invariants: preserve the pink pot, ivory rim, soil, pot contours, outline, position, size, transparent square canvas and framing from image 1 EXACTLY. Do not redraw, move, resize, or recolour the pot. Change ONLY the stems, leaves and flowers above it: THREE taller slim sage stems of different heights, with the central dusty-pink HEART beginning to unfold (recognisable two heart lobes, with a visible folded edge), the left warm AMBER STAR half open with some points unfolding but still partly folded, and the right BLUSH ROSE half open with its first petals turning outward but a furled centre. Make this visibly further along than image 1's tightly closed buds, but NOT a fully bloomed bouquet. Exactly three flowers, same heart-centre, star-left, rose-right arrangement. Two small sage leaves on the stems. Keep every flower fully in frame with clear transparent margin. Match the same pastel flat editorial line art and warm ivory exterior outline. No hand, sleeve, person, text, numbers, UI, additional objects, shadow, floor, background, glow, 3D, glitter or sparkles. Output one transparent PNG with true alpha. THE POT MUST STAY IDENTICAL TO IMAGE 1.
+
+Original brief:
+USE: 10–14 swipes of the 15-swipe Standouts learning period.
+
+STYLE REFERENCE
+Attach apps/mobile/assets/illustrations/standouts-rose-bouquet.png.
+Use this reference for the flat pastel line art, colours, and warm ivory outline. Do not copy the hand, sleeve, or bouquet grip.
+
+SHARED STYLE
+Create a transparent 1254 by 1254 PNG for the Standouts learning page.
+Use flat pastel fills, flowing organic contours, and one consistent warm ivory outline (#F6E7D6).
+Use dusty pink #E39A9A for the pot, sage #9BAF98 for stems and leaves, dusty pink #D8A3AD for the heart, warm amber #D5AD72 for the star, and blush #E7BAC5 for the rose.
+Keep the outline visible on the app background #100F0D. The app background must not appear in the PNG.
+Keep the drawing clear when displayed at 200 pixels.
+No hand, sleeve, text, numbers, interface, frame, floor, shadow, glow, gradient, 3D rendering, glitter, or scattered sparkles. The star is a flower on a stem.
+
+CONTINUITY ACROSS THE THREE IMAGES
+Use the same round terracotta-pink pot with the same ivory rim, size, position, viewing angle, and contour in every image.
+Keep the pot centred at the bottom: approximately x=447 to 807 and y=878 to 1138 on the 1254-pixel canvas.
+Keep the canvas framing and outline thickness identical. Only the plant above the rim changes.
+After generating the first image, attach it as an additional reference for the remaining two images. Preserve its pot exactly.
+Show the complete illustration with transparent space around it. Use opaque pastel fills inside the shapes and true alpha transparency outside.
+
+SUBJECT
+The same small dusty-pink pot, with three taller sage stems. The buds are half open: a dusty-pink heart beginning to unfold, an amber star starting to open, and a blush rose with its first petals turning out. Add two sage leaves. These flowers are almost ready, not fully open. No hand.

@@ -1,11 +1,12 @@
+import { introReady, markStandoutsOpened, markWelcomeShown, useStandoutsIntro } from '../../features/discovery/standoutsIntro';
 import type { RootState } from "../../store";
 import { useSelector } from "react-redux";
 import { useVerificationStatus } from '../../features/verification/useVerificationStatus';
 import { UnverifiedNudge } from '../../features/verification/VerifyNudge';
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
+  BackHandler,
   FlatList,
   Pressable,
   RefreshControl,
@@ -13,7 +14,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "../../services/api";
@@ -27,6 +28,10 @@ import {
 } from "../../features/discovery/components/ExploreProfileCard";
 import { ConnectionProfileCard } from "../../features/discovery/components/ConnectionProfileCard";
 import { StandoutsIcon } from '../../features/discovery/components/StandoutsIcon';
+import { LearningPage } from '../../features/discovery/components/StandoutsLearning';
+import {StandoutsLoading} from '../../features/discovery/components/StandoutsLoading';
+import {StandoutsInfoContent} from './StandoutsInfoScreen';
+import type { Learning } from '../../features/discovery/standoutsLearning';
 import { ProfileDetailModal } from "../../features/discovery/components/profile-detail/ProfileDetailModal";
 import { RoseSheetHost, type RoseSheetHostHandle } from "../../features/discovery/components/RoseSheet";
 import type {RoseConfirmation} from '../../features/discovery/components/profile-detail/RoseSentCelebration';
@@ -39,7 +44,16 @@ type Standout = ExploreProfile & { reasons?: string[]; roseSent?: boolean; slot?
 
 /** Shown once: Roses went from 20 a week to 5 (STANDOUTS_PLAN.md 4.2). */
 const ROSES_NOTICE_KEY = "standouts:roses-rarer-notice";
-type State = "ok" | "setup_required" | "not_enough_people";
+/**
+ * The last set shown, so opening Standouts again (each visit is a new screen)
+ * shows it at once, with its Roses sent and people hidden, instead of loading.
+ * Kept per account; not for the demo.
+ */
+let lastSet: { userId: string; at: number; cards: Standout[]; state: State; refreshAt: number | null } | null = null;
+/** After this long away, coming back to Standouts loads them again. */
+const STANDOUTS_STALE_MS = 15 * 60_000;
+// "learning": a new person's type is still being learned (features/discovery/standoutsLearning).
+type State = "ok" | "setup_required" | "not_enough_people" | "learning";
 
 function standoutReasonIcon(reason: string): string {
   if (/interest/i.test(reason)) return ABOUT_ME_ICONS.interests;
@@ -72,10 +86,31 @@ function roseRefreshLabel(iso: string | undefined) {
  * Nothing on this screen says how much attention anyone is getting. In one
  * college, that number would be a leaderboard of classmates.
  */
-export const StandoutsScreen = () => {
+export const StandoutsScreen = ({demoOnly = false, demoProgress, demoIntroSeen = false, onDemoIntroSeen, onClose, onExplore}: {
+  demoOnly?: boolean;
+  demoProgress?: Learning;
+  demoIntroSeen?: boolean;
+  onDemoIntroSeen?: (seen: boolean) => void;
+  onClose?: () => void;
+  onExplore?: () => void;
+} = {}) => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
-  const [demo, setDemo] = useState(false);
+  const focused = useIsFocused();
+  const [demo, setDemo] = useState(demoOnly);
+  const demoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestId = useRef(0);
+  const pendingRequest = useRef<AbortController | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      requestId.current++;
+      pendingRequest.current?.abort();
+      if (demoTimer.current) clearTimeout(demoTimer.current);
+    };
+  }, []);
   // Demo-only previews of the two states a real account rarely shows.
   const [demoNoRoses, setDemoNoRoses] = useState(false);
   const [demoFew, setDemoFew] = useState(false);
@@ -90,15 +125,20 @@ export const StandoutsScreen = () => {
     setRosesNotice(false);
     AsyncStorage.setItem(ROSES_NOTICE_KEY, "1").catch(() => undefined);
   };
-  const [cards, setCards] = useState<Standout[]>([]);
-  const [state, setState] = useState<State>("ok");
+  const userId = useSelector((root: RootState) => root.auth.user?.id ?? "");
+  const last = lastSet;
+  const kept = !demo && last && last.userId === userId && Date.now() - last.at < STANDOUTS_STALE_MS
+    && (!last.refreshAt || Date.now() < last.refreshAt) ? last : null;
+  const [cards, setCards] = useState<Standout[]>(kept?.cards ?? []);
+  const [state, setState] = useState<State>(kept?.state ?? "ok");
+  const [learning, setLearning] = useState<Learning | null>(null);
   const verification = useVerificationStatus();
   // "People near me" before verifying: the card says near you, not a campus.
   const nearMe = useSelector((root: RootState) => root.auth.user?.discoveryMode === "distance");
-  const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
+  const [loading, setLoading] = useState(!kept);
+  const [loaded, setLoaded] = useState(!!kept);
   const [error, setError] = useState(false);
-  const [refreshAt, setRefreshAt] = useState<number | null>(null);
+  const [refreshAt, setRefreshAt] = useState<number | null>(kept?.refreshAt ?? null);
   const [now, setNow] = useState(Date.now());
   const [selected, setSelected] = useState<Standout | null>(null);
   const [origin, setOrigin] = useState<CardOrigin>();
@@ -109,46 +149,103 @@ export const StandoutsScreen = () => {
   const listRose = useRef<RoseSheetHostHandle<Standout>>(null);
   const [roseConfirmation, setRoseConfirmation] = useState<RoseConfirmation | null>(null);
   const roseSending = useRef(false);
-  const roseFollowup = useRef<{name: string; matched: boolean; trial: boolean} | null>(null);
+  const roseFollowup = useRef<{name: string; userId: string; photo: string | null; matchId?: string; matched: boolean; trial: boolean} | null>(null);
   const { balance: roseBalance, send: sendRose, refresh: refreshRoses } = useRoses();
 
   const roses = demo ? (demoNoRoses ? 0 : demoRoses) : (roseBalance?.roses ?? null);
   const outOfRoses = roses === 0;
+  // First visit: explain before loading either the learning page or the set.
+  const intro = useStandoutsIntro();
+  const introLoaded = demoOnly || introReady();
+  const showIntro = demoOnly ? !demoIntroSeen : !demo && introLoaded && !intro.welcomeShown;
+  const closeIntro = useCallback(() => {
+    if (demoOnly) onDemoIntroSeen?.(true); else markWelcomeShown();
+  }, [demoOnly, onDemoIntroSeen]);
+  useFocusEffect(useCallback(() => {
+    if (demoOnly) return;
+    if (introLoaded && intro.welcomeShown && loaded && !loading && state !== 'learning') markStandoutsOpened();
+  }, [demoOnly, introLoaded, intro.welcomeShown, loaded, loading, state]));
+  useEffect(() => {
+    if (!showIntro || !focused) return;
+    const back = BackHandler.addEventListener('hardwareBackPress', () => {closeIntro(); return true;});
+    return () => back.remove();
+  }, [showIntro, focused, closeIntro]);
 
+  const loadedAt = useRef(kept?.at ?? 0);
+  useEffect(() => {
+    if (demo || !loaded || loading || error || !loadedAt.current) return;
+    // Never kept: the next visit must ask again, it may have just finished.
+    if (state === "learning") { lastSet = null; return; }
+    lastSet = { userId, at: loadedAt.current, cards, state, refreshAt };
+  }, [demo, loaded, loading, error, userId, cards, state, refreshAt]);
   const load = useCallback(
     async (useDemo: boolean = demo, few: boolean = demoFew) => {
+      const id = ++requestId.current;
+      pendingRequest.current?.abort();
+      const controller = useDemo ? null : new AbortController();
+      pendingRequest.current = controller;
+      const latest = () => mounted.current && id === requestId.current;
       setLoading(true);
       setError(false);
+      loadedAt.current = Date.now();
       try {
         if (useDemo) {
+          if (demoOnly && demoProgress && demoProgress.done < demoProgress.needed) {
+            setCards([]);
+            setState('learning');
+            setLearning(demoProgress);
+            setRefreshAt(null);
+            return;
+          }
+          if (demoOnly) {
+            // Demo-only response delay, long enough to review one complete icon loop.
+            if (demoTimer.current) clearTimeout(demoTimer.current);
+            await new Promise<void>(resolve => {demoTimer.current = setTimeout(resolve, 2400);});
+            if (!latest()) return;
+          }
           const set = few ? [] : demoStandouts();
           setCards(set);
           setState(few ? "not_enough_people" : "ok");
+          setLearning(null);
           setRefreshAt(Date.now() + 5 * 60 * 60_000);
           return;
         }
-        const response = await api.get("/discover/standouts");
+        const response = await api.get("/discover/standouts", {signal: controller?.signal});
+        if (!latest()) return;
         const data = response.data.data ?? { cards: [], state: "ok" };
         setCards(data.cards ?? []);
         setState(data.state ?? "ok");
+        setLearning(data.learning ?? null);
         setRefreshAt(Date.now() + (data.refreshesInSeconds ?? 0) * 1000);
       } catch {
+        if (!latest()) return;
+        loadedAt.current = 0;
         setCards([]);
         setError(true);
       } finally {
-        setLoading(false);
-        setLoaded(true);
+        if (latest()) {pendingRequest.current = null; setLoading(false); setLoaded(true);}
       }
     },
-    [demo, demoFew],
+    [demo, demoFew, demoOnly, demoProgress],
   );
 
+  // Today's set loads on the first visit. Coming back (from a profile, a Rose,
+  // the info page) keeps it - a reload only after a long time away or a
+  // failed load; a new day's set comes from the countdown below.
+  const shownDemo = useRef(demo);
+  const shownState = useRef(state);
+  shownState.current = state;
   useFocusEffect(
     useCallback(() => {
-      void load();
+      if (showIntro) return;
+      if (!demo && (!introLoaded || !intro.welcomeShown)) return;
+      // Swipes in Explore can finish learning while this screen is away.
+      const stale = shownState.current === 'learning' || !loadedAt.current || Date.now() - loadedAt.current > STANDOUTS_STALE_MS;
+      if (stale || shownDemo.current !== demo) void load();
+      shownDemo.current = demo;
       if (!demo) void refreshRoses();
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [demo]),
+    }, [demo, showIntro, introLoaded, intro.welcomeShown]),
   );
 
   // The countdown ticks once a minute; a new day's set is fetched when it passes.
@@ -158,12 +255,12 @@ export const StandoutsScreen = () => {
   }, []);
   const crossedMidnight = useRef(false);
   useEffect(() => {
-    if (!refreshAt || now < refreshAt || crossedMidnight.current) return;
+    if (showIntro || !introLoaded || !refreshAt || now < refreshAt || crossedMidnight.current) return;
     crossedMidnight.current = true;
     void load().finally(() => {
       crossedMidnight.current = false;
     });
-  }, [now, refreshAt, load]);
+  }, [now, refreshAt, load, showIntro, introLoaded]);
 
   const markRosed = (id: string) =>
     setCards((current) => current.map((item) => (item.id === id ? { ...item, roseSent: true } : item)));
@@ -173,6 +270,7 @@ export const StandoutsScreen = () => {
     roseSending.current = true;
     try {
       let matched = false;
+      let matchId: string | undefined;
       let trial = false;
       if (demo) {
         if (demoNoRoses || demoRoses <= 0) return;
@@ -182,10 +280,11 @@ export const StandoutsScreen = () => {
         const result = await sendRose(card.id, comment, {onTrialRoseSpent: () => {trial = true;}});
         if (!result) return;
         matched = !!result.matchCreated;
+        matchId = result.matchId;
       }
       // Keep the card and expanded profile in place until confirmation finishes.
       markRosed(card.id);
-      roseFollowup.current = {name: card.name, matched, trial};
+      roseFollowup.current = {name: card.name, userId: card.id, photo: card.primaryPhoto ?? card.photos[0] ?? null, matchId, matched, trial};
       setRoseConfirmation({name: card.name, matched});
     } finally {
       roseSending.current = false;
@@ -210,8 +309,7 @@ export const StandoutsScreen = () => {
       }
     };
     if (followup.matched) {
-      Alert.alert("It's a match!", `You and ${followup.name} liked each other.`, [{text: 'OK', onPress: showTrialReminder}],
-        {cancelable: true, onDismiss: showTrialReminder});
+      navigation.navigate('MatchCelebration', {name: followup.name, userId: followup.userId, photo: followup.photo, matchId: followup.matchId, roseTrial: followup.trial});
     } else {
       showTrialReminder();
     }
@@ -225,6 +323,7 @@ export const StandoutsScreen = () => {
 
   const seen = useRef(new Set<string>());
   const visible = useRef(({ viewableItems }: any) => {
+    if (demoOnly) return;
     for (const view of viewableItems) {
       const card = view.item as Standout;
       if (card.impressionId && !card.impressionId.startsWith("demo") && !seen.current.has(card.impressionId)) {
@@ -295,7 +394,7 @@ export const StandoutsScreen = () => {
   );
 
   // Fewer than a full set of 8 before verifying: the campus-only reason, and the way out.
-  const fewBeforeVerifying = !demo && !!verification?.limited && loaded && !loading && !error && state !== "setup_required" && cards.length < 8;
+  const fewBeforeVerifying = !demo && !!verification?.limited && loaded && !loading && !error && state !== "setup_required" && state !== "learning" && cards.length < 8;
 
   const roseSheet = (inline: boolean) => (
     <RoseSheetHost<Standout>
@@ -310,21 +409,28 @@ export const StandoutsScreen = () => {
     />
   );
 
+  if (showIntro) return <StandoutsInfoContent onClose={closeIntro} weeklyGrant={demo ? 5 : roseBalance?.grant}
+    trial={!demo && !!roseBalance?.trial} topInset={insets.top} bottomInset={insets.bottom} />;
+
   return (
     <View style={[styles.container, { paddingTop: insets.top + 4 }]}>
       <View style={styles.header}>
-        <Pressable onPress={() => navigation.goBack()} accessibilityRole="button" accessibilityLabel="Go back" style={styles.back}>
+        <Pressable onPress={onClose ?? (() => navigation.goBack())} accessibilityRole="button" accessibilityLabel="Go back" style={styles.back}>
           <Ionicons name="chevron-back" size={24} color="#fff" />
         </Pressable>
         <View style={styles.headerText}>
           <Text style={styles.title} numberOfLines={1}>Standouts</Text>
-          <Pressable onPress={() => navigation.navigate('StandoutsInfo', { weeklyGrant: demo ? 5 : roseBalance?.grant, trial: !demo && !!roseBalance?.trial })}
+          <Pressable onPress={() => demoOnly ? onDemoIntroSeen?.(false) : navigation.navigate('StandoutsInfo', { weeklyGrant: demo ? 5 : roseBalance?.grant, trial: !demo && !!roseBalance?.trial })}
             accessibilityRole="button" accessibilityLabel="About Standouts" accessibilityHint="Learn how daily picks and Roses work" hitSlop={8}
             style={({ pressed }) => [styles.infoButton, pressed && styles.pressed]}>
             <Ionicons name="information-circle-outline" size={20} color="#C8C0B8" style={styles.infoGlyph} />
           </Pressable>
         </View>
-        {__DEV__ && (
+        {demoOnly && state !== 'learning' ? <Pressable accessibilityRole="button" accessibilityLabel="Replay Standouts animation"
+          style={styles.back} onPress={() => {setCards([]); setLoaded(false); void load(true);}}>
+          <Ionicons name="refresh" size={22} color="#E8C698" />
+        </Pressable> : null}
+        {__DEV__ && !demoOnly && (
           <Pressable
             onPress={() => {
               const next = !demo;
@@ -368,7 +474,7 @@ export const StandoutsScreen = () => {
         keyExtractor={(item) => item.id}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.grid, { paddingBottom: insets.bottom + 28 }]}
-        ListHeaderComponent={
+        ListHeaderComponent={state === 'learning' || !loaded ? null :
           <>
           {/* Before verifying, Standouts come from their campus only (GOOGLE_SIGNUP_PLAN.md 7.5):
               a thin day says why, and what verifying opens. Otherwise reminder 7. */}
@@ -410,10 +516,11 @@ export const StandoutsScreen = () => {
         onViewableItemsChanged={visible}
         viewabilityConfig={{ itemVisiblePercentThreshold: 60, minimumViewTime: 700 }}
         refreshControl={<RefreshControl refreshing={loading && loaded && cards.length > 0} onRefresh={() => load()} tintColor={colors.primary} />}
-        ListFooterComponent={loading && !loaded ? <ActivityIndicator color={colors.primary} /> : null}
         ListEmptyComponent={
           // An unverified person's empty day is explained by the card above.
-          loaded && !loading && !fewBeforeVerifying ? (
+          loaded && !loading && !error && state === "learning" && learning ? (
+            <LearningPage progress={learning} onExplore={onExplore ?? (() => navigation.navigate("Main", {screen: "Dashboard"}))} />
+          ) : loaded && !loading && !fewBeforeVerifying ? (
             <View style={styles.emptyBlock}>
               <View style={styles.emptyIcon}>{error ? <Ionicons name="cloud-offline-outline" size={30} color="#E6C6A7" />
                 : <StandoutsIcon size={34} color="#E6C6A7" heartColor="#F2BDC9" />}</View>
@@ -457,6 +564,7 @@ export const StandoutsScreen = () => {
         />
       )}
       {roseSheet(false)}
+      <StandoutsLoading loading={(!demo && !introLoaded) || (loading && cards.length === 0)} active={focused} />
     </View>
   );
 };

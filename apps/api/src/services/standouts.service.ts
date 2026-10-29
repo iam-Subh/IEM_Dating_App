@@ -8,7 +8,7 @@ import { ReciprocityService } from './reciprocity.service';
 import { discoveryProfileSelect, publicProfile } from './public-profile.service';
 import { buildCards, istDay, secondsLeftToday } from './discovery-cards.service';
 import { StandoutsV3Service, dayFrom } from './standouts-v3.service';
-import { setSize, type SlotType } from './standouts-algorithm';
+import { STANDOUTS_LEARN_SWIPES, setSize, type SlotType } from './standouts-algorithm';
 
 /**
  * Standouts (STANDOUTS_LIKES_SPEC.md section 5): a small daily set chosen
@@ -49,7 +49,7 @@ export const STANDOUTS_REPEAT_DAYS = 7;
 /** How deep into the eligible pool the day's choice looks. */
 const STANDOUTS_BUDGET = 120;
 
-export type StandoutsState = 'ok' | 'setup_required' | 'not_enough_people';
+export type StandoutsState = 'ok' | 'setup_required' | 'not_enough_people' | 'learning';
 
 type DayRow = { picks: string[]; hidden: string[]; slots: string[] };
 
@@ -68,6 +68,12 @@ export class StandoutsService {
     }
 
     const day = istDay();
+    // A new person: no set until their type is learned, unless today's was already made.
+    const learning = await this.learning(me.id);
+    if (learning.done < learning.needed
+      && !(await prisma.standoutDay.findUnique({ where: { viewerId_day: { viewerId: me.id, day } }, select: { day: true } }))) {
+      return { cards: [], state: 'learning' as StandoutsState, learning, refreshesInSeconds };
+    }
     const row = await this.dayFor(me, day);
     const hidden = new Set(row.hidden);
     const picks = row.picks.filter((id) => !hidden.has(id));
@@ -110,6 +116,15 @@ export class StandoutsService {
       // So the app can say when the next set arrives without inventing a clock.
       refreshesInSeconds,
     };
+  }
+
+  /**
+   * How far a new person is with "Learning your type": swipes saved (a Like or
+   * a pass; one taken back with Rewind is gone), out of STANDOUTS_LEARN_SWIPES.
+   */
+  static async learning(userId: string) {
+    const done = await prisma.swipe.count({ where: { swiperId: userId } });
+    return { needed: STANDOUTS_LEARN_SWIPES, done: Math.min(done, STANDOUTS_LEARN_SWIPES) };
   }
 
   /** "Not for me": hidden for the rest of the day. Records no swipe - nothing the other person could ever notice. */

@@ -53,7 +53,13 @@ export type TasteProfile = {
 export type TasteEvent = { traits: string[]; liked: boolean; weight: number };
 
 /** Below this many swipes there is no taste yet: neutral (5.3). */
-export const TASTE_MIN_SWIPES = 20;
+export const TASTE_MIN_SWIPES = 15;
+/**
+ * A new person's Standouts wait until they have swiped this many times
+ * ("learning"), so their first set is picked from their taste, not blind.
+ * Likes and passes both count: a pass teaches as much as a Like.
+ */
+export const STANDOUTS_LEARN_SWIPES = TASTE_MIN_SWIPES;
 /** A Rose sent from Standouts counts as this many Likes; "Not for me" as this much of a Pass. */
 export const ROSE_WEIGHT = 3;
 export const NOT_FOR_ME_WEIGHT = 0.5;

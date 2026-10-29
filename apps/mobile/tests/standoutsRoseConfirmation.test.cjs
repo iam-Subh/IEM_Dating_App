@@ -35,7 +35,7 @@ function harness() {
     const source = ts.transpileModule(fs.readFileSync(path.join(__dirname, '../src', file), 'utf8'), {
       compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.React, esModuleInterop: true},
     }).outputText;
-    vm.runInNewContext(source, {exports: exported, __DEV__: true, setInterval: () => 1, clearInterval() {},
+    vm.runInNewContext(source, {exports: exported, __DEV__: true, AbortController, setInterval: () => 1, clearInterval() {},
       require: name => name === 'react' ? react : modules[name], ...extra});
     return exported;
   }, render(component, props) {
@@ -80,7 +80,7 @@ function standouts(sendResult = {}, trial = false) {
   const modules = {
     'react-native': {View: 'View', Text: 'Text', Pressable: 'Button', FlatList: 'List', RefreshControl: 'Refresh', StyleSheet: {create: value => value}, Alert: {alert: (...args) => alerts.push(args)}},
     'react-redux': {useSelector: select => select({auth: {user: {}}})},
-    '@react-navigation/native': {useFocusEffect() {}, useNavigation: () => ({navigate: (...args) => destinations.push(args), goBack() {}})},
+    '@react-navigation/native': {useFocusEffect() {}, useIsFocused: () => true, useNavigation: () => ({navigate: (...args) => destinations.push(args), goBack() {}})},
     'react-native-safe-area-context': {useSafeAreaInsets: () => ({top: 0, bottom: 0})},
     '@expo/vector-icons': {Ionicons: 'Icon'},
     '../../core/theme/colors': {colors: {}},
@@ -89,6 +89,9 @@ function standouts(sendResult = {}, trial = false) {
     '../../features/verification/VerifyNudge': {UnverifiedNudge: 'Nudge'},
     '../../features/discovery/components/ConnectionProfileCard': {ConnectionProfileCard: 'Card'},
     '../../features/discovery/components/StandoutsIcon': {StandoutsIcon: 'StandoutsIcon'},
+    '../../features/discovery/components/StandoutsLoading': {StandoutsLoading: 'StandoutsLoading'},
+    '../../features/discovery/components/StandoutsLearning': {LearningPage: 'LearningPage'},
+    './StandoutsInfoScreen': {StandoutsInfoContent: 'StandoutsInfoContent'},
     '../../features/discovery/components/profile-detail/ProfileDetailModal': {ProfileDetailModal: 'Profile'},
     '../../features/discovery/components/RoseSheet': {RoseSheetHost: 'Host'},
     '../../features/discovery/useRoses': {useRoses: () => ({balance: {roses: 5}, refresh() {}, send: async (...args) => {
@@ -96,6 +99,8 @@ function standouts(sendResult = {}, trial = false) {
       return typeof sendResult === 'function' ? sendResult() : sendResult;
     }})},
     '../../features/discovery/demo/likesDemo': {demoStandouts: () => [card]},
+    // The first-visit welcome is already seen here: these tests are about the Rose.
+    '../../features/discovery/standoutsIntro': {useStandoutsIntro: () => ({pointerShown: true, welcomeShown: true, openedDay: null}), introReady: () => true, markStandoutsOpened() {}, markWelcomeShown() {}},
     '@react-native-async-storage/async-storage': {getItem: async () => '1', setItem: async () => {}},
   };
   const {StandoutsScreen} = h.load('screens/main/StandoutsScreen.tsx', modules);

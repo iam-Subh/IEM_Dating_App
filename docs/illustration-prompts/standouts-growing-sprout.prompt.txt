@@ -1,0 +1,30 @@
+OUTPUT: standouts-growing-sprout.png
+Generator: OpenAI built-in image_gen.imagegen
+Transparent background: true
+Selected generated prompt:
+Create ONE transparent PNG illustration, stage 1 of a three-image plant growth sequence for a mobile app. The attached bouquet is a STYLE REFERENCE ONLY. Match its flat pastel editorial line art, smooth organic shapes, pale ivory exterior outlines and restrained warm interior contours. Do not include its hand or sleeve. SUBJECT: a small round terracotta-pink flower pot, dusty pink #E39A9A with a simple ivory rim, with exactly TWO tiny sage-green sprouts just poking out of the soil. Each sprout has two small rounded sage leaves. No flowers or buds yet. COMPOSITION: square canvas, entire pot and sprouts visible, pot centred horizontally in the lower half with generous clear transparent space above for later growth. The pot is approximately 40 percent of the canvas width, its base at 88 percent canvas height, rim at about 67 percent canvas height. Sprouts are short, reaching about 52 percent canvas height. This exact pot, position, scale, shape and framing must be reused for the next stages. Flat opaque pastel fills, ivory outlines #F6E7D6 visible on #100F0D, sage #9BAF98. No hand, person, sleeve, text, numbers, UI, frame, floor, shadow, glow, gradient, 3D rendering, glitter or scattered sparkles. Actual transparent background with alpha, no painted background or checkerboard. Clean edges. A finished standalone app asset, not a mockup.
+
+Original brief:
+USE: 0–4 swipes of the 15-swipe Standouts learning period.
+
+STYLE REFERENCE
+Attach apps/mobile/assets/illustrations/standouts-rose-bouquet.png.
+Use this reference for the flat pastel line art, colours, and warm ivory outline. Do not copy the hand, sleeve, or bouquet grip.
+
+SHARED STYLE
+Create a transparent 1254 by 1254 PNG for the Standouts learning page.
+Use flat pastel fills, flowing organic contours, and one consistent warm ivory outline (#F6E7D6).
+Use dusty pink #E39A9A for the pot, sage #9BAF98 for stems and leaves, dusty pink #D8A3AD for the heart, warm amber #D5AD72 for the star, and blush #E7BAC5 for the rose.
+Keep the outline visible on the app background #100F0D. The app background must not appear in the PNG.
+Keep the drawing clear when displayed at 200 pixels.
+No hand, sleeve, text, numbers, interface, frame, floor, shadow, glow, gradient, 3D rendering, glitter, or scattered sparkles. The star is a flower on a stem.
+
+CONTINUITY ACROSS THE THREE IMAGES
+Use the same round terracotta-pink pot with the same ivory rim, size, position, viewing angle, and contour in every image.
+Keep the pot centred at the bottom: approximately x=447 to 807 and y=878 to 1138 on the 1254-pixel canvas.
+Keep the canvas framing and outline thickness identical. Only the plant above the rim changes.
+After generating the first image, attach it as an additional reference for the remaining two images. Preserve its pot exactly.
+Show the complete illustration with transparent space around it. Use opaque pastel fills inside the shapes and true alpha transparency outside.
+
+SUBJECT
+A small round terracotta-pink flower pot (dusty pink #E39A9A with an ivory rim) with two tiny sage-green sprouts just coming out of the soil. Each sprout has two small round leaves. The sprouts rise only a short distance above the rim. No hand.

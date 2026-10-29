@@ -8,7 +8,7 @@ import { RetrievalService } from './retrieval.service';
 import { ReciprocityService } from './reciprocity.service';
 import { compatibility } from './compatibility.service';
 import {
-  NOT_FOR_ME_WEIGHT, ROSE_WEIGHT, SetBuilder, buildTaste, combinedScore, fairLimit, fairLimits, freshnessScore,
+  NOT_FOR_ME_WEIGHT, ROSE_WEIGHT, STANDOUTS_LEARN_SWIPES, SetBuilder, buildTaste, combinedScore, fairLimit, fairLimits, freshnessScore,
   likedValues, reciprocityScore, roundRobin, setSize, slotPlan, tasteScore, traitKeys, underseenBoost,
   type Ranked, type SlotType, type TasteProfile, type Traits, type VarietyLimits,
 } from './standouts-algorithm';
@@ -343,7 +343,12 @@ export class StandoutsV3Service {
     const covered = mode === 'live'
       ? new Set((await prisma.standoutDay.findMany({ where: { day }, select: { viewerId: true } })).map((row) => row.viewerId))
       : new Set<string>();
-    const viewers = candidates.map(asViewer).filter((user) => setupComplete(user) && !covered.has(user.id));
+    // Still learning their type: no blind set tonight. Theirs is made on the
+    // open after their STANDOUTS_LEARN_SWIPES-th swipe. They can still be
+    // picked for others - only their own set waits.
+    const swiped = await prisma.swipe.groupBy({ by: ['swiperId'], where: { swiperId: { in: candidates.map((user) => user.id) } }, _count: { _all: true } });
+    const learned = new Set(swiped.filter((row) => row._count._all >= STANDOUTS_LEARN_SWIPES).map((row) => row.swiperId));
+    const viewers = candidates.map(asViewer).filter((user) => setupComplete(user) && !covered.has(user.id) && learned.has(user.id));
 
     const entries: { id: string; list: Ranked[]; size: number; taste: TasteProfile; relaxed: boolean }[] = [];
     let next = 0;

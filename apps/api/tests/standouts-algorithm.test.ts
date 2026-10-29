@@ -27,7 +27,7 @@ test('traits become keys, normalised', () => {
   ]);
 });
 
-test('no taste below 20 swipes: neutral, and compatibility takes its weight', () => {
+test('no taste below 15 swipes: neutral, and compatibility takes its weight', () => {
   const taste = buildTaste(Array.from({ length: 10 }, () => ({ traits: ['department:cse'], liked: true, weight: 1 })));
   assert.equal(tasteScore(taste, ['department:cse']), null);
   const withoutTaste = combinedScore({ compat: 80, taste: null, reciprocity: 50, fresh: 100 }, WEIGHTS);
