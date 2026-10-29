@@ -1,0 +1,22 @@
+# Build context for apps/api/Dockerfile (the repository root). Only what the
+# API image needs; secrets never go in.
+**/.env
+**/.env.*
+!**/.env.example
+**/node_modules
+**/dist
+.git
+apps/mobile/*
+!apps/mobile/package.json
+admin
+docs
+maestro
+output
+tmp
+scripts
+patches
+*.log
+*.png
+apps/api/tests
+apps/api/debug-output.txt
+apps/api/test-output*.json

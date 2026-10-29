@@ -1,0 +1,6 @@
+# https for the API (deploy/docker-compose.prod.yml, profile duckdns). Caddy gets
+# and renews the certificate from Let's Encrypt on its own.
+{$API_DOMAIN} {
+	encode gzip
+	reverse_proxy api:3000
+}

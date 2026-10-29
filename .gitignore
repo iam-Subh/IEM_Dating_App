@@ -113,3 +113,7 @@ apps/face-service/models/*.onnx
 .gradle/
 apps/mobile/modules/*/android/build/
 .cxx/
+
+# Server settings (deploy/): real values live only on the server.
+deploy/*.env
+!deploy/*.env.example
