@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const ts = require('typescript');
 
 // Run the actual gesture callbacks. Native recognition still needs a device.
-function preview(cached = true) {
+function preview(cached = true, minimal = false) {
   const shared = [];
   const gestures = {};
   const cancelled = [];
@@ -71,7 +71,7 @@ function preview(cached = true) {
   };
   const root = exported.ProfilePhotoPreview({photos: ['file:///photo.jpg'], index: 0, onIndex() {}, onClose() {}});
   const child = find(root, node => typeof node.type === 'function');
-  const tree = child.type(child.props);
+  const tree = child.type({...child.props, controls: !minimal});
   const composition = find(tree, node => node.type === 'Detector').props.gesture;
   return {gestures, composition, shared, cancelled, cache, image:find(tree,node => node.type === 'AnimatedImage'), spinner:find(tree,node => node.type === 'Spinner'),
     transform: () => ({scale: shared[0].value, x: shared[1].value, y: shared[2].value}),
@@ -95,6 +95,18 @@ test('drag does not wait for double-tap and remains available after a pinch', ()
   pinch.onFinalize();
   pan.onChange({changeX: 12, changeY: -7, numberOfPointers: 1});
   assert.deepEqual(p.transform(), {scale: 2, x: 32, y: 3});
+});
+
+test('the single-photo viewer double-taps in and out and resets its pan', () => {
+  const p = preview(true, true);
+  const tap = p.gestures.tap.callbacks;
+  tap.onEnd({x: 260, y: 400}, false);
+  assert.deepEqual(p.transform(), {scale: 1, x: 0, y: 0});
+  tap.onEnd({x: 260, y: 400}, true);
+  assert.deepEqual(p.transform(), {scale: 2.5, x: -120, y: -120});
+  p.gestures.pan.callbacks.onChange({changeX: 20, changeY: 10, numberOfPointers: 1});
+  tap.onEnd({x: 220, y: 380}, true);
+  assert.deepEqual(p.transform(), {scale: 1, x: 0, y: 0});
 });
 
 test('drag responds immediately when the user reverses direction at an edge', () => {

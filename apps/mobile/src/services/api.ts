@@ -25,6 +25,8 @@ export const api = axios.create({
 
 let refreshPromise: Promise<string> | null = null;
 let refreshSession: string | null = null;
+/** The whole answer of the last refresh: user and onboarding, for the app's start. */
+let lastRefresh: any = null;
 let sessionGeneration = 0;
 let sessionUser = store.getState().auth.user?.id;
 let sessionHasToken = !!store.getState().auth.token;
@@ -43,11 +45,35 @@ const requireSession = (key: string) => {
 async function refreshAccessToken(refreshToken: string, key: string): Promise<string> {
   const response = await api.post('/auth/refresh', { refreshToken });
   const next = response.data.data;
+  lastRefresh = next;
   requireSession(key);
   await credentialStore.rotateRefreshToken(refreshToken, next.refreshToken, () => key === sessionKey());
   requireSession(key);
   store.dispatch(setAccessToken(next.accessToken));
   return next.accessToken;
+}
+
+/**
+ * The app's start: renews the session through the same single in-flight
+ * refresh as everything else, and returns the server's answer (user,
+ * onboarding). It used to post /auth/refresh by itself; a request failing
+ * with 401 at the same moment refreshed too, the server saw one refresh token
+ * spent twice (REUSE_DETECTED), ended the session, and a person half way
+ * through sign-up was logged out and lost their place.
+ */
+export async function refreshAtStart(): Promise<any> {
+  const refreshToken = await credentialStore.getRefreshToken();
+  if (!refreshToken) return null;
+  const key = sessionKey();
+  if (!refreshPromise || refreshSession !== key) {
+    refreshSession = key;
+    const pending = refreshAccessToken(refreshToken, key).finally(() => {
+      if (refreshPromise === pending) { refreshPromise = null; refreshSession = null; }
+    });
+    refreshPromise = pending;
+  }
+  await refreshPromise;
+  return lastRefresh;
 }
 
 /**

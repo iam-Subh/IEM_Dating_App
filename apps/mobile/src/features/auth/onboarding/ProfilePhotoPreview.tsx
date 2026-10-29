@@ -28,7 +28,9 @@ function PhotoZoomControls({scale, loaded, onZoom, onReset}: {
   </View>;
 }
 
-function ZoomablePhoto({uri}: {uri: string}) {
+export type PhotoZoomState = {scale: SharedValue<number>; x: SharedValue<number>; y: SharedValue<number>};
+
+export function ZoomablePhoto({uri, controls = true, label = 'Profile photo', onZoomState}: {uri: string; controls?: boolean; label?: string; onZoomState?: (state: PhotoZoomState) => void}) {
   const [viewport, setViewport] = useState({width: 0, height: 0});
   const [source, setSource] = useState(() => previewPhotoSize(uri) ?? {width: 0, height: 0});
   const [loaded, setLoaded] = useState(() => !!previewPhotoSize(uri));
@@ -41,6 +43,7 @@ function ZoomablePhoto({uri}: {uri: string}) {
   const y = useSharedValue(0);
   const start = useSharedValue({scale: 1, x: 0, y: 0, focalX: 0, focalY: 0});
   const pinching = useSharedValue(false);
+  useEffect(() => {onZoomState?.({scale, x, y});}, [onZoomState, scale, x, y]);
 
   useEffect(() => {
     if (loaded || failed) {setShowLoading(false); return;}
@@ -107,7 +110,15 @@ function ZoomablePhoto({uri}: {uri: string}) {
       setViewport(current => current.width === width && current.height === height ? current : {width, height});
     }}>
       <GestureDetector gesture={gesture}>
-        <Animated.View style={s.gestureArea} collapsable={false}>
+        <Animated.View style={s.gestureArea} collapsable={false}
+          accessible={!controls} accessibilityRole="image" accessibilityLabel={label}
+          accessibilityHint="Double-tap or pinch to zoom. Drag to move a zoomed photo."
+          accessibilityActions={controls ? undefined : [{name: 'increment', label: 'Zoom in'}, {name: 'decrement', label: 'Zoom out'}, {name: 'reset', label: 'Reset zoom'}]}
+          onAccessibilityAction={controls ? undefined : event => {
+            if (event.nativeEvent.actionName === 'increment') zoom(0.5);
+            else if (event.nativeEvent.actionName === 'decrement') zoom(-0.5);
+            else if (event.nativeEvent.actionName === 'reset') reset();
+          }}>
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>
           {!failed && <Animated.Image key={retry} source={{uri}} resizeMode="contain" fadeDuration={0}
             style={[StyleSheet.absoluteFill, photoStyle]}
@@ -124,7 +135,7 @@ function ZoomablePhoto({uri}: {uri: string}) {
         <TapChoice accessibilityRole="button" onPress={() => {setFailed(false); setRetry(value => value + 1);}} style={s.reset}><Text style={s.resetText}>Try again</Text></TapChoice>
       </View>}
     </View>
-    <PhotoZoomControls scale={scale} loaded={loaded} onZoom={zoom} onReset={reset}/>
+    {controls && <PhotoZoomControls scale={scale} loaded={loaded} onZoom={zoom} onReset={reset}/>}
   </View>;
 }
 

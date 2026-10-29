@@ -4,6 +4,7 @@ import { onShared, takeSharedContent } from '../../modules/chat-notify';
 import { SharePickerScreen } from '../features/chat/screens/SharePickerScreen';
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import {getDiscoveryArrival, subscribeDiscoveryArrival} from '../features/discovery/discoveryArrival';
+import {getNewcomerTeachingActive, subscribeNewcomerTeaching} from '../features/teaching/tipsSeen';
 import { DarkTheme, NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useDispatch, useSelector } from 'react-redux';
@@ -28,6 +29,7 @@ import { AuthNavigator } from './AuthNavigator';
 import { MainTabNavigator } from './MainTabNavigator';
 import { PhotoUploadScreen } from '../features/auth/screens/PhotoUploadScreen';
 import { ChatScreen } from '../features/chat/screens/ChatScreen';
+import { MatchCelebrationScreen } from '../features/discovery/screens/MatchCelebrationScreen';
 import { ChatAttachmentsScreen } from '../features/chat/components/AttachmentPickerSheet';
 import { EditProfileScreen } from '../screens/main/EditProfileScreen';
 import { ProfilePreviewScreen } from '../screens/main/ProfilePreviewScreen';
@@ -54,10 +56,13 @@ import {ProfileInterestSelectionReviewSheet} from '../features/auth/onboarding/I
 import { EditBioScreen } from '../screens/main/edit/EditBioScreen';
 import { EditHeightScreen } from '../screens/main/edit/EditHeightScreen';
 import { DiscardChangesSheet } from '../components/DiscardChangesSheet';
+import { LogoutSheet } from '../screens/main/LogoutSheet';
 import { DeleteAccountScreen } from '../screens/main/DeleteAccountScreen';
 import { DataExportScreen } from '../screens/main/DataExportScreen';
 import { ChangePasswordScreen } from '../screens/main/ChangePasswordScreen';
 import { AccountDeletionPendingScreen } from '../screens/main/AccountDeletionPendingScreen';
+import { AccountGoodbyeScreen } from '../features/auth/screens/AccountGoodbyeScreen';
+import { useAccountGoodbye } from '../features/auth/accountGoodbye';
 import { LegalScreen } from '../features/legal/LegalScreen';
 import { TermsUpdateScreen } from '../features/legal/TermsUpdateScreen';
 import { LEGAL_VERSION } from '../features/legal/legal';
@@ -73,6 +78,7 @@ import { startQueue } from '../features/feedback/reportQueue';
 import { startEngagementTracking } from '../features/feedback/engagement';
 
 import { HiddenWordsScreen } from '../features/safety/HiddenWordsScreen';
+import { HowItWorksScreen, SwipeLessonScreen } from '../features/teaching/TeachingScreens';
 import { ShareDateScreen } from '../features/safety/ShareDateScreen';
 import { NomineeScreen } from '../features/safety/NomineeScreen';
 import { ProfileVideoSourceSheet } from '../screens/main/profile/ProfileVideoSourceSheet';
@@ -83,7 +89,7 @@ import { RequiredDiscoveryPreferencesScreen } from '../features/auth/screens/Req
 import { StudentVerificationScreen } from '../features/auth/screens/StudentVerificationScreen';
 import { VerifyRulesScreen } from '../features/verification/VerifyRulesScreen';
 import { navigationRef } from './navigationRef';
-import { api, renewSession } from '../services/api';
+import { api, refreshAtStart, renewSession } from '../services/api';
 import { credentialStore } from '../services/credentialStore';
 import { logout, setCredentials, setNextRequiredStep, resolveOnboardingStep } from '../store/authSlice';
 import { registerCurrentDeviceForPush, setUpNotifications, watchPushToken, watchScreenForChatNotifications } from '../services/notifications';
@@ -223,7 +229,7 @@ const linking = {
       Settings: 'Settings',
       Account: 'settings/account',
       VerifyCollege: 'verify',
-      ...(__DEV__ ? {DiscoveryTransitionReplay: 'discovery-transition', MapIntroductionReplay: 'map-introduction-preview', ReminderPreview: 'reminders-preview'} : {}),
+      ...(__DEV__ ? {DiscoveryTransitionReplay: 'discovery-transition', MapIntroductionReplay: 'map-introduction-preview', ReminderPreview: 'reminders-preview', TeachingArtworkPreview: 'teaching-artwork', MatchCelebration: 'match-preview'} : {}),
       RealPersonCheck: 'verify/real-person',
       AppSettings: 'settings/app',
       ActivityStatus: 'settings/activity',
@@ -243,6 +249,7 @@ installErrorMemory();
 
 export const RootNavigator = () => {
   const arrival = useSyncExternalStore(subscribeDiscoveryArrival, getDiscoveryArrival);
+  const newcomerTeaching = useSyncExternalStore(subscribeNewcomerTeaching, getNewcomerTeachingActive);
   const dispatch = useDispatch();
   const reducedMotion = useReducedMotion();
   const [bootstrapping, setBootstrapping] = useState(true);
@@ -252,6 +259,7 @@ export const RootNavigator = () => {
   // Bug reports that waited for a signal, and when to ask for a rating (docs/FEEDBACK.md).
   useEffect(() => { if (isAuthenticated) { startQueue(); startEngagementTracking(); } }, [isAuthenticated]);
   const deletionPending = useSelector((state: RootState) => state.auth.user?.accountStatus === 'deletion_pending');
+  const accountGoodbye = useAccountGoodbye();
   // An account that hasn't agreed to the current Terms agrees before the app opens (features/legal).
   const needsTerms = useSelector((state: RootState) => ((state.auth.user as { termsVersion?: number } | null)?.termsVersion ?? 0) < LEGAL_VERSION);
   const token = useSelector((state: RootState) => state.auth.token);
@@ -263,9 +271,15 @@ export const RootNavigator = () => {
     }
   }, [token, authUser, nextRequiredStep, dispatch]);
   const onboardingStep = useSelector((state: RootState) => state.auth.onboardingDraft?.step);
-  const hasDraft = !!token && onboardingStep !== undefined;
+  // A session on this phone: the token, or - started offline or with the
+  // server down - a saved sign-in still waiting to renew (renewPending). The
+  // token is never stored, so after the app was closed or swiped away it is
+  // only back once /auth/refresh answers; till then someone mid sign-up must
+  // still open on the page they left, not on Welcome.
+  const hasSession = !!token || renewPending;
+  const hasDraft = hasSession && onboardingStep !== undefined;
   const needsDiscoveryPreferences = useSelector((state: RootState) =>
-    !!state.auth.token && (
+    hasSession && (
       state.auth.nextRequiredStep === 'discoveryPreferences' ||
       (state.auth.isAuthenticated && !state.auth.user?.preferencesConfirmedAt)
     )
@@ -288,9 +302,9 @@ export const RootNavigator = () => {
       const refreshToken = await credentialStore.getRefreshToken();
       if (!refreshToken) { if (active) setBootstrapping(false); return; }
       try {
-        const response = await api.post('/auth/refresh', { refreshToken });
-        const data = response.data.data;
-        await credentialStore.setRefreshToken(data.refreshToken);
+        // The shared single refresh (services/api.ts): never two at once.
+        const data = await refreshAtStart();
+        if (!data) return;
         dispatch(setCredentials({ user: data.user, token: data.accessToken, nextRequiredStep: data.onboarding?.nextRequiredStep, restoreCachedProfile: true }));
       } catch (error: any) {
         // Only the server saying the sign-in is invalid or revoked ends it.
@@ -328,7 +342,7 @@ export const RootNavigator = () => {
     openPendingPushUrl();
   }, [isAuthenticated, token]);
   // Onboarding done and the profile ready: the first good moment to ask.
-  const readyForPrimer = isAuthenticated && !!token && !hasDraft && !needsDiscoveryPreferences && !nextRequiredStep && !arrival.active;
+  const readyForPrimer = isAuthenticated && !!token && !hasDraft && !needsDiscoveryPreferences && !nextRequiredStep && !arrival.active && !newcomerTeaching;
   useEffect(() => {
     if (!readyForPrimer) return;
     const timer = setTimeout(() => void askAtMoment({ kind: 'onboarding' }), 2500);
@@ -402,8 +416,13 @@ export const RootNavigator = () => {
     };
   }, [renewPending, dispatch]);
   if (bootstrapping) return <View />;
-  const needsStudentVerification = !!token && !authUser?.googleSub && nextRequiredStep === 'studentVerification';
-  const needsProfile = !!token && nextRequiredStep === 'profile';
+  const needsStudentVerification = hasSession && !authUser?.googleSub && nextRequiredStep === 'studentVerification';
+  const needsProfile = hasSession && nextRequiredStep === 'profile';
+  // Back in sign-up with no progress on this phone (logged out, reinstalled):
+  // with studies and college already saved, only the photo and video are
+  // left (OnboardingService), so open there instead of the very first page.
+  const detailsDone = !!authUser?.department && !!authUser?.graduationYear && !(authUser?.googleSub && !authUser?.college);
+  const profileStart = detailsDone ? 'PhotoUpload' : 'HouseRules';
 
   return (
     <NavigationContainer ref={navigationRef} linking={linking} theme={navigationTheme}>
@@ -430,13 +449,21 @@ export const RootNavigator = () => {
           <Stack.Screen name="TermsUpdate" component={TermsUpdateScreen} />
         ) : isAuthenticated ? (
           <Stack.Screen name="Main" component={MainTabNavigator} options={{animation: arrival.active ? 'none' : 'default'}} />
+        ) : accountGoodbye ? (
+          // Just deleted the account here: goodbye, then Welcome.
+          <Stack.Screen name="AccountGoodbye" component={AccountGoodbyeScreen} options={{ animation: 'fade' }} />
         ) : (
           <Stack.Screen name="Auth">
-            {() => <AuthNavigator initialRouteName={needsProfile ? 'HouseRules' : 'Welcome'} />}
+            {() => <AuthNavigator initialRouteName={needsProfile ? profileStart : 'Welcome'} />}
           </Stack.Screen>
         )}
+        {/* Screens reachable signed in and out. On logout (no token) the key
+            changes, so any of them still open - Settings, Delete account - is
+            dropped and the person lands on Welcome, not left on a dead screen. */}
+        <Stack.Group navigationKey={token ? 'account' : 'guest'}>
         {__DEV__ && <Stack.Screen name="MapIntroductionReplay" component={require('../development/MapIntroductionReplay').MapIntroductionReplay} options={{animation: 'none'}} />}
         {__DEV__ && <Stack.Screen name="ReminderPreview" component={require('../development/ReminderPreview').ReminderPreview} options={{animation: 'none'}} />}
+        {__DEV__ && <Stack.Screen name="TeachingArtworkPreview" component={require('../development/TeachingArtworkPreviewScreen').TeachingArtworkPreviewScreen} options={{animation: 'none'}} />}
         {__DEV__ && <Stack.Screen name="DiscoveryTransitionReplay" component={require('../development/DiscoveryTransitionReplay').DiscoveryTransitionReplay} options={{animation: 'none'}} />}
       <Stack.Screen name="PhotoMediaOptions" component={PhotoMediaSheet} options={{
         presentation: 'formSheet', sheetAllowedDetents: 'fitToContents', sheetInitialDetentIndex: 0,
@@ -454,6 +481,7 @@ export const RootNavigator = () => {
             screen fell back to the platform transition, which scales the
             incoming content - the message bubbles visibly grew and settled on
             every open. A slide has no scale. */}
+        <Stack.Screen name="MatchCelebration" component={MatchCelebrationScreen} options={{ animation: reducedMotion ? 'none' : 'fade', contentStyle: {backgroundColor: '#100F0D'} }} />
         <Stack.Screen name="ChatScreen" component={ChatScreen} options={{ animation: 'none' }} />
         <Stack.Screen name="ChatAttachments" component={ChatAttachmentsScreen} options={{
           presentation: 'formSheet', sheetAllowedDetents: [0.75, 0.95], sheetInitialDetentIndex: 0,
@@ -510,6 +538,11 @@ export const RootNavigator = () => {
         }}/>
         <Stack.Screen name="EditBio" component={EditBioScreen} options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="EditHeight" component={EditHeightScreen} options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="LogoutSheet" component={LogoutSheet} options={{
+          presentation: 'formSheet', sheetAllowedDetents: 'fitToContents', sheetGrabberVisible: true,
+          sheetCornerRadius: 24, sheetElevation: 0, sheetShouldOverflowTopInset: false,
+          contentStyle: { backgroundColor: '#232323' },
+        }} />
         <Stack.Screen name="DiscardChanges" component={DiscardChangesSheet} options={{
           presentation: 'formSheet', sheetAllowedDetents: 'fitToContents', sheetGrabberVisible: true,
           sheetCornerRadius: 24, sheetElevation: 0, sheetShouldOverflowTopInset: false,
@@ -533,6 +566,8 @@ export const RootNavigator = () => {
         <Stack.Screen name="EditResidency" component={EditResidencyScreen} options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="EditYear" component={EditStudiesScreen} options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="Settings" component={SettingsScreen} options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="HowItWorks" component={HowItWorksScreen} options={{ animation: 'slide_from_right', contentStyle: { backgroundColor: '#100F0D' } }} />
+        <Stack.Screen name="SwipeLesson" component={SwipeLessonScreen} options={{ animation: 'fade', contentStyle: { backgroundColor: '#100F0D' } }} />
         {/* Camera to editor in one screen; its own back handling asks before discarding edits. */}
         <Stack.Screen name="CreateStory" component={StoryCreatorScreen} options={{ animation: 'slide_from_bottom', gestureEnabled: false }} />
         {/* Transparent, so the screen underneath shows while a Story is swiped down to close. */}
@@ -583,6 +618,7 @@ export const RootNavigator = () => {
         <Stack.Screen name="ArchivedChats" component={ChatListScreen} initialParams={{ folder: 'archived' }} options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="ReportProblem" component={ReportProblemScreen} options={{ animation: 'slide_from_bottom' }} />
         <Stack.Screen name="MyReports" component={MyReportsScreen} options={{ animation: 'slide_from_right' }} />
+        </Stack.Group>
       </Stack.Navigator>
       </AppErrorBoundary>
       {/* Reporting, the same sheet from every screen (features/safety/ReportSheet.tsx). */}

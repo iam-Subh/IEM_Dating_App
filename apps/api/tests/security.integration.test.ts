@@ -169,8 +169,13 @@ test('existing users receive and complete the discovery preference step', async 
       department: 'CSE',
       graduationYear: 2028,
       preferencesConfirmedAt: null,
+      profileVideoUrl: `https://media.example.test/${accountA}/intro.mp4`,
     },
   });
+  // Sign-up also needs a main photo and the video (OnboardingService.statusFromUser).
+  if (!await prisma.profilePhoto.count({ where: { userId: accountA } })) {
+    await prisma.profilePhoto.create({ data: { userId: accountA, photoUrl: `https://media.example.test/${accountA}/main.jpg`, isPrimary: true } });
+  }
   const auth = await authorization(accountA);
   const before = await request(app).get('/api/v1/profile/readiness').set(auth);
   assert.equal(before.status, 200);

@@ -81,6 +81,10 @@ test('the chosen college fills the profile and the campus list, without verifyin
   assert.equal(user.claimedInstitutionId, institutionId);
   assert.equal(user.college, institution.name);
   assert.equal(await CampusService.institutionOf(google), institutionId);
+  // Studies and college done, no photo or video yet: still sign-up (the review page asks for both).
+  assert.equal((await OnboardingService.getStatus(google)).nextRequiredStep, 'profile', 'no photo or video yet');
+  await prisma.profilePhoto.create({ data: { userId: google, photoUrl: `https://media.example.test/${google}/main.jpg`, isPrimary: true } });
+  await prisma.user.update({ where: { id: google }, data: { profileVideoUrl: `https://media.example.test/${google}/intro.mp4` } });
   const status = await OnboardingService.getStatus(google);
   assert.equal(status.nextRequiredStep, 'discoveryPreferences');
   assert.equal(status.membershipVerified, false);
