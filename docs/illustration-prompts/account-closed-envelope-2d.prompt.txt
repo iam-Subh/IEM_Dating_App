@@ -1,0 +1,8 @@
+Generator: OpenAI built-in imagegen. No CLI/API fallback.
+Use: Account-closed confirmation screen in IEM Connect.
+Original generated asset: C:/Users/subha/.codex/generated_images/01a10648-9530-7922-9246-049e825dff6b/exec-2badd35a-8b47-4f74-b0ea-c5b91f018b72.png
+Project asset: apps/mobile/assets/illustrations/account-closed-envelope-2d.png
+Asset processing: Trim transparent margins and resize to 600 px wide. Preserve alpha.
+
+Exact prompt:
+Create a single production illustration asset for the account-closed confirmation screen of IEM Connect, a college social app. True transparent PNG background, square 1024 x 1024 canvas. Flat 2D editorial line art: a closed cream paper envelope with a small dusty-pink heart seal at its center; one short curved sage-green leafy sprig rests behind its lower right edge. The envelope is viewed straight on with a slight 8 degree tilt; clean curved hand-drawn outlines and restrained, well-proportioned paper folds. Composition: one cohesive object group centered with 12 percent transparent padding on all sides, broad horizontal silhouette. No hands, no people, no faces. Palette strictly warm ivory #F6E7D6, dusty rose #E39A9A, blush #F2C1BE, muted sage #7E9A6B, warm brown #7A4A44. Brown inner contour lines, a thin warm ivory outside keyline for legibility on dark charcoal. Solid flat fills only. Calm, respectful and understated, suited to someone leaving an app. Crisp readable at 160 px. No text, no letters, no typography, no sparkle, no stars, no check mark, no sad face, no trash can, no lock, no extra hearts floating around, no border panel, no background shape, no floor, no shadows, no gradients, no texture, no 3D, no clay, no gloss, no photographic rendering.

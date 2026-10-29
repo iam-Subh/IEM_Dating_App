@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AppState, Linking } from 'react-native';
+import { AppState, Linking, Share } from 'react-native';
 
 /**
  * When to ask for a rating (docs/FEEDBACK.md). Two different asks:
@@ -105,4 +105,10 @@ export async function openPlayStoreListing() {
   const market = `market://details?id=${PLAY_PACKAGE}&showAllReviews=true`;
   try { await Linking.openURL(market); }
   catch { await Linking.openURL(`https://play.google.com/store/apps/details?id=${PLAY_PACKAGE}&showAllReviews=true`); }
+}
+
+/** Settings > Share IEM Connect: the phone's share sheet, with the Play Store link. */
+export async function shareApp() {
+  const url = `https://play.google.com/store/apps/details?id=${PLAY_PACKAGE}`;
+  try { await Share.share({ message: `Meet people from your college on IEM Connect: ${url}` }); } catch { /* closed or no app to share to */ }
 }

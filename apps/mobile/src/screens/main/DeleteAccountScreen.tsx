@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SettingsPage, settingsPalette as palette } from '../../core/settings/SettingsLayout';
 import { api } from '../../services/api';
 import { clearLocalSession, logoutSession } from '../../services/sessionLogout';
+import { showAccountGoodbye } from '../../features/auth/accountGoodbye';
 
 const REASONS = [
   { id: 'found_someone', label: 'I met someone' },
@@ -37,12 +38,14 @@ export function DeleteAccountScreen() {
     if (!confirmed || busy) return;
     setBusy(true);
     try {
-      await api.post('/account/deletion', {
+      const response = await api.post('/account/deletion', {
         confirmation: 'DELETE',
         ...(reason ? { reason } : {}),
         ...(reason === 'other' && note.trim() ? { note: note.trim() } : {}),
       });
-      // The server has signed out every device, this one too.
+      // The server has signed out every device, this one too. A goodbye
+      // with the erase date shows before Welcome.
+      showAccountGoodbye(response.data?.data?.scheduledFor ?? null);
       if (!await clearLocalSession()) {
         Alert.alert('Storage cleanup failed', 'Your account is scheduled for deletion and you are signed out. Some data on this phone could not be removed.');
       }

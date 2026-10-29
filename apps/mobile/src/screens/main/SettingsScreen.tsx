@@ -1,9 +1,8 @@
 import { useVerificationStatus } from '../../features/verification/useVerificationStatus';
 import { SUPPORT_EMAIL, writeToSupport } from '../../core/support';
-import { openPlayStoreListing } from '../../features/feedback/engagement';
-import { previewRatingPrompt } from '../../features/feedback/RatingPrompt';
+import { openPlayStoreListing, shareApp } from '../../features/feedback/engagement';
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator, ScrollView, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
@@ -12,7 +11,6 @@ import { colors } from '../../core/theme/colors';
 import { useNavigation } from '@react-navigation/native';
 import { RootState } from '../../store';
 import { api } from '../../services/api';
-import { logoutSession } from '../../services/sessionLogout';
 import { getSocket } from '../../services/socket';
 import { SettingsToggle } from '../../core/settings/SettingsLayout';
 import { createSettingsSwitchQueue, type SettingsSwitchValues } from '../../core/settings/settingsSwitchQueue';
@@ -72,25 +70,8 @@ export const SettingsScreen = () => {
     } finally { setUnitSaving(false); }
   };
 
-  const handleLogout = () => {
-    const leave = async (everywhere: boolean) => {
-      const result = await logoutSession({ everywhere });
-      if (!result.localCleared || !result.serverRevoked) {
-        Alert.alert('Logout incomplete', everywhere
-          ? 'This phone is signed out. Other devices may stay signed in: check Active sessions next time.'
-          : 'Local access was closed. Some stored data or server session cleanup failed.');
-      }
-    };
-    Alert.alert(
-      'Log out?',
-      'Log out of this phone, or of every device signed in to your account.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'All devices', style: 'destructive', onPress: () => void leave(true) },
-        { text: 'This phone', style: 'destructive', onPress: () => void leave(false) },
-      ],
-    );
-  };
+  // This phone or every device, asked in a sheet (LogoutSheet).
+  const handleLogout = () => navigation.navigate('LogoutSheet');
 
   // One JSON file, saved to a folder or opened (DataExportScreen).
   const handleExport = () => navigation.navigate('DataExport');
@@ -291,6 +272,47 @@ export const SettingsScreen = () => {
           {accountBusy && <ActivityIndicator color={colors.primary} style={styles.busy} />}
         </View>
 
+        {/* Getting to know the app, and passing it on. */}
+        <View style={styles.card}>
+          <View style={styles.cardHeading}>
+            {/* The app's own icon (assets/app-icon-small.png, a 96 px copy of icon.png). */}
+            <Image source={require('../../../assets/app-icon-small.png')} style={styles.appIcon} accessible={false} />
+            <Text style={styles.cardTitle}>About IEM Connect</Text>
+          </View>
+          <TouchableOpacity style={[styles.linkRow]} onPress={() => navigation.navigate('HowItWorks')} accessibilityRole="button">
+            <Ionicons name="book-outline" size={20} color={palette.icon} />
+            <View style={styles.rowBody}>
+              <Text style={styles.rowText}>How IEM Connect works</Text>
+              <Text style={styles.rowHint} numberOfLines={1}>The basics, and where to find everything</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={palette.muted} />
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.linkRow]} onPress={() => navigation.navigate('SwipeLesson')} accessibilityRole="button">
+            <Ionicons name="swap-horizontal-outline" size={20} color={palette.icon} />
+            <View style={styles.rowBody}>
+              <Text style={styles.rowText}>Practise swiping</Text>
+              <Text style={styles.rowHint} numberOfLines={1}>A practice card. No Likes are sent</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={palette.muted} />
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.linkRow]} onPress={() => void shareApp()} accessibilityRole="button">
+            <Ionicons name="share-social-outline" size={20} color={palette.icon} />
+            <View style={styles.rowBody}>
+              <Text style={styles.rowText}>Share IEM Connect</Text>
+              <Text style={styles.rowHint} numberOfLines={1}>Send the app to a friend</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={palette.muted} />
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.linkRow, styles.lastRow]} onPress={() => void openPlayStoreListing()} accessibilityRole="button">
+            <Ionicons name="star-outline" size={20} color={palette.icon} />
+            <View style={styles.rowBody}>
+              <Text style={styles.rowText}>Rate us on Google Play</Text>
+              <Text style={styles.rowHint} numberOfLines={1}>Tell others what you think</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={palette.muted} />
+          </TouchableOpacity>
+        </View>
+
         {/* Safety, help and the published documents (docs/SAFETY_AND_LEGAL.md 6). */}
         <View style={styles.card}>
           <View style={styles.cardHeading}>
@@ -331,24 +353,6 @@ export const SettingsScreen = () => {
             </View>
             <Ionicons name="chevron-forward" size={18} color={palette.muted} />
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.linkRow]} onPress={() => void openPlayStoreListing()} accessibilityRole="button">
-            <Ionicons name="star-outline" size={20} color={palette.icon} />
-            <View style={styles.rowBody}>
-              <Text style={styles.rowText}>Rate us on Google Play</Text>
-              <Text style={styles.rowHint} numberOfLines={1}>Tell others what you think</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={palette.muted} />
-          </TouchableOpacity>
-          {__DEV__ && (
-            <TouchableOpacity style={[styles.linkRow]} onPress={previewRatingPrompt} accessibilityRole="button">
-              <Ionicons name="happy-outline" size={20} color={palette.icon} />
-              <View style={styles.rowBody}>
-                <Text style={styles.rowText}>Preview rating card</Text>
-                <Text style={styles.rowHint} numberOfLines={1}>Development only</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={palette.muted} />
-            </TouchableOpacity>
-          )}
           <TouchableOpacity style={[styles.linkRow]} onPress={() => navigation.navigate('HiddenWords')} accessibilityRole="button">
             <Ionicons name="eye-off-outline" size={20} color={palette.icon} />
             <View style={styles.rowBody}>
@@ -451,6 +455,7 @@ const styles = StyleSheet.create({
   appSettings: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: palette.card, borderRadius: 18, paddingHorizontal: 16, paddingVertical: 14 },
   cardHeading: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 11, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.07)' },
   headingIcon: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.055)' },
+  appIcon: { width: 30, height: 30, borderRadius: 10 },
   cardTitle: { fontFamily: 'DMSans_700Bold', fontSize: 17, color: '#FFFFFF' },
   linkRow: { minHeight: 51, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.07)' },
   switchRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.07)' },
