@@ -114,6 +114,7 @@ export class NewMatchService {
       story: rings.get(other.id) ?? null,
       rose: rose ? { from: rose.senderId === userId ? ('me' as const) : ('them' as const) } : null,
       sharedInterests: shared.slice(0, 4),
+      self: { avatar: avatarOf(me) },
       openers: this.openers(firstName, shared, theirs.map(labelOf), other.department),
     };
   }

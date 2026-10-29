@@ -232,7 +232,7 @@ export const ExploreScreen = ({ searchBar }: { searchBar?: React.ReactNode } = {
     });
     setCards((current) => current.filter((item) => item.id !== card.id));
     if (response.data.data?.matchCreated)
-      Alert.alert("It's a match!", `You and ${card.name} liked each other.`);
+      navigation.navigate('MatchCelebration', {name: card.name, userId: card.id, photo: card.primaryPhoto ?? card.photos[0], matchId: response.data.data.matchId});
   };
 
   /** A Rose is a Like, so the card leaves the grid exactly as a Like would. */
@@ -246,7 +246,7 @@ export const ExploreScreen = ({ searchBar }: { searchBar?: React.ReactNode } = {
     setSelected(null);
     setCards((current) => current.filter((item) => item.id !== card.id));
     if (result.matchCreated) {
-      Alert.alert("It's a match!", `You and ${card.name} liked each other.`);
+      navigation.navigate('MatchCelebration', {name: card.name, userId: card.id, photo: card.primaryPhoto ?? card.photos[0], matchId: result.matchId});
     }
   };
 

@@ -20,6 +20,7 @@ export type MatchIntroData = {
   matchId: string;
   matchedAt: string;
   other: { id: string; name: string; avatar: string | null; department: string | null };
+  self?: { avatar: string | null };
   story: StoryRing;
   rose: { from: "me" | "them" } | null;
   sharedInterests: string[];

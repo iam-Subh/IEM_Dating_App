@@ -9,7 +9,7 @@ import {VerifyRulesScreen, type VerifyReason} from '../features/verification/Ver
 import {StoryShareVerifyLine, UnverifiedNudge} from '../features/verification/VerifyNudge';
 import {BlueBadgeRow, FaceMediaNote, type FaceStatus} from '../features/verification/RealPerson';
 import {ChatVerificationReminder, ChatVerificationWaiting} from '../features/verification/ChatVerificationReminder';
-import {DeckReminderCard, DeckVerifyBanner, type DeckCardKind} from '../features/verification/DeckVerifyBanner';
+import {DeckReminderCard, DeckVerifyPrompt, type DeckCardKind} from '../features/verification/DeckVerifyBanner';
 import {ReminderRow, reminderColors} from '../features/verification/ReminderParts';
 import {ReminderArt} from '../features/verification/ReminderArt';
 import type {VerificationStatus} from '../features/verification/useVerificationStatus';
@@ -229,7 +229,7 @@ const deckCard = (kind: DeckCardKind, title: string, when: string, status: Parti
 });
 const deckBanner = (title: string, when: string, status: Partial<VerificationStatus>, props: {swipes?: number; topCardUnverified?: boolean} = {}): Step => ({
   group: 'Discovery deck', title, where: 'Explore', when, status,
-  render: () => <Deck banner={<DeckVerifyBanner swipes={props.swipes ?? 0} topCardUnverified={props.topCardUnverified}/>}/>,
+  render: () => <Deck><DeckVerifyPrompt swipes={props.swipes ?? 0} topCardUnverified={props.topCardUnverified}/></Deck>,
 });
 const listBanner = (title: string, where: string, when: string, banner: React.ReactNode, body: React.ReactNode = people): Step => ({
   group: 'Banners', title, where, when,
@@ -332,10 +332,10 @@ const STEPS: Step[] = [
   push('A verified student liked you', 'An unverified person gets a Like from a verified student.', 'Open Likes You to see who - and get your blue badge so they see it.', 'See who'),
   push('A verified student sent you a Rose', 'The same, for a Rose.', 'Open Likes You to see who - and get your blue badge so they see it.', 'See who'),
 
-  {group: 'Match', title: 'Verified match', where: 'After a match', when: 'A match. The verify line shows only when they are verified and you are not.',
-    render: ({close}) => <Deck><MatchSheet match={{name: 'Rohan', verifyNudge: true}} onClose={close} onSayHi={() => Alert.alert('Say hi', 'Opens the chat with Rohan.')} onVerify={() => Alert.alert('Verify', 'Opens the college email step.')}/></Deck>},
+  {group: 'Match', title: 'Verified match', where: 'After a match', when: 'A new match with a verified profile.',
+    render: ({close}) => <Deck><MatchSheet match={{name: 'Rohan', ownPhoto: portrait, photo: man}} onClose={close} onSayHi={() => Alert.alert('Say hi', 'Opens the chat with Rohan.')}/></Deck>},
   {group: 'Match', title: 'Match', where: 'After a match', when: 'Any other match.',
-    render: ({close}) => <Deck><MatchSheet match={{name: 'Aanya', verifyNudge: false}} onClose={close} onSayHi={() => Alert.alert('Say hi', 'Opens the chat with Aanya.')} onVerify={() => {}}/></Deck>},
+    render: ({close}) => <Deck><MatchSheet match={{name: 'Aanya', ownPhoto: man, photo: portrait}} onClose={close} onSayHi={() => Alert.alert('Say hi', 'Opens the chat with Aanya.')}/></Deck>},
 
   {group: 'Verification screens', title: 'College email', where: 'Verify', when: 'Every Verify button opens this. Demo code: 123456.', render: ({close}) => <College onBack={close}/>},
   {group: 'Verification screens', title: 'Code', where: 'Verify', when: 'After Send code. The sixth digit sends it. Demo code: 123456.', render: ({close}) => <College codePage onBack={close}/>},

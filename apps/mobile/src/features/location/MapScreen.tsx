@@ -600,7 +600,7 @@ export function MapScreen() {
       if (card.impressionId) await api.post("/discover/visible", { impressionId: card.impressionId }).catch(() => undefined);
       const response = await api.post("/discover/swipe", { targetId: card.id, action });
       if (response.data.data?.matchCreated) {
-        Alert.alert("It's a match!", `You and ${card.name} liked each other.`);
+        navigation.navigate('MatchCelebration', {name: card.name, userId: card.id, photo: card.primaryPhoto ?? card.photos[0], matchId: response.data.data.matchId});
       }
       return true;
     } catch (cause: any) {
