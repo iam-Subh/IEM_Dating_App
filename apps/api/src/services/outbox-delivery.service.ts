@@ -387,6 +387,8 @@ export class OutboxDeliveryService {
     const payload = objectPayload(event.payload);
     const recipientId = String(payload.recipientId ?? '');
     const isRose = payload.rose === true;
+    // A comment on a photo or the bio rode on it: the push says on what, never the words.
+    const commented = payload.commented === 'photo' || payload.commented === 'bio' ? payload.commented : null;
     if (!recipientId) return;
     const [recipient, swipe] = await Promise.all([
       prisma.user.findUnique({ where: { id: recipientId }, select: { notifyLikes: true, accountStatus: true, likesSeenAt: true } }),
@@ -426,7 +428,11 @@ export class OutboxDeliveryService {
       if (!claimed) return;
       // Only what is true: the unseen Likes waiting right now.
       const { unseen } = await LikesService.summary(recipientId);
-      if (unseen <= 1) {
+      if (unseen <= 1 && commented) {
+        title = commented === 'photo' ? 'Someone commented on your photo' : 'Someone commented on your bio';
+        body = 'Open Likes You to read it.';
+        template = undefined;
+      } else if (unseen <= 1) {
         const liker = await prisma.user.findUnique({ where: { id: swipe.swiperId }, select: { campusRef: { select: { name: true } } } });
         const campus = liker?.campusRef?.name;
         const set = campus ? LINES.like_one : LINES.like_one.filter((line) => !line.title.includes('{campus}'));

@@ -15,6 +15,8 @@ import {
   View,
 } from "react-native";
 import { useFocusEffect, useIsFocused, useNavigation } from "@react-navigation/native";
+import { useSelector } from "react-redux";
+import type { RootState } from "../../store";
 import { useSocketEvent } from "../../services/useSocketEvent";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -28,12 +30,16 @@ import { ConnectionProfileCard } from "../../features/discovery/components/Conne
 import { LikesSortSheet, type LikesSort } from "../../features/discovery/components/LikesSortSheet";
 import { ProfileDetailModal } from "../../features/discovery/components/profile-detail/ProfileDetailModal";
 import { demoArrival, demoByType, demoLikes } from "../../features/discovery/demo/likesDemo";
+import { CommentMark } from "../../features/discovery/comments/CommentButton";
+import type { CommentShown } from "../../features/discovery/comments/commentTypes";
 
 type Like = ExploreProfile & {
   likedAt: string;
   isRose: boolean;
   roseId: string | null;
   roseComment: string | null;
+  /** A comment on one of your photos or your bio, sent with this Like (or Rose). */
+  comment?: CommentShown | null;
   /** Arrived since you last opened Likes You. */
   isNew?: boolean;
 };
@@ -73,6 +79,12 @@ export const LikesYouScreen = ({ embedded = false, onChanged }: { embedded?: boo
   const [pending, setPending] = useState<Record<string, Pending>>({});
   const [serverCounts, setServerCounts] = useState<Counts | null>(null);
   const generation = useRef(0);
+  // The demo's comment answers your own photo, so it shows it.
+  const ownPhoto = useRef<string | null>(null);
+  ownPhoto.current = useSelector((root: RootState) => {
+    const me: any = root.auth.user;
+    return (me?.avatarUrl ?? me?.photos?.[0]?.photoUrl ?? me?.photos?.[0] ?? null) as string | null;
+  });
   const busy = useRef(false);
   const answering = useRef(new Set<string>());
   // Live (see the socket effect below): who was on screen before a live
@@ -95,7 +107,7 @@ export const LikesYouScreen = ({ embedded = false, onChanged }: { embedded?: boo
       setError(false);
       try {
         if (useDemo) {
-          const data = demoLikes();
+          const data = demoLikes(ownPhoto.current);
           setRoses(data.roses);
           setLikes(nextSort === "type" ? demoByType(data.likes) : data.likes);
           setCursor(null);
@@ -257,21 +269,18 @@ export const LikesYouScreen = ({ embedded = false, onChanged }: { embedded?: boo
     setPending((current) => ({ ...current, [like.id]: { action, failed: false } }));
     try {
       let matched = false;
+      let matchId: string | undefined;
       if (!demo) {
         const response = await api.post("/discover/swipe", { targetId: like.id, action });
         matched = !!response.data.data?.matchCreated;
+        matchId = response.data.data?.matchId;
       } else {
         matched = action === "like";
       }
       remove(like.id);
       onChanged?.();
       if (matched) {
-        Alert.alert("It's a match!", `You and ${like.name} liked each other.`, [
-          { text: "Later", style: "cancel" },
-          ...(demo
-            ? []
-            : [{ text: "Say hello", onPress: () => navigation.navigate("Main", { screen: "Matches" }) }]),
-        ]);
+        navigation.navigate('MatchCelebration', {name: like.name, userId: like.id, photo: like.primaryPhoto ?? like.photos[0], matchId, demo});
       }
     } catch (cause: any) {
       // Refused (rare: an account closed or a block in the meantime) - the
@@ -291,7 +300,9 @@ export const LikesYouScreen = ({ embedded = false, onChanged }: { embedded?: boo
   const [shownNotes, setShownNotes] = useState<Set<string>>(new Set());
   const reportNote = (like: Like) =>
     void openReport({
-      userId: like.id, name: like.name, sourceType: "rose", sourceId: like.roseId ?? undefined,
+      userId: like.id, name: like.name,
+      // A comment is reported as itself; a Rose note without one, as the Rose.
+      ...(like.comment ? { sourceType: "comment" as const, sourceId: like.comment.id } : { sourceType: "rose" as const, sourceId: like.roseId ?? undefined }),
       ...(demo ? { send: () => undefined, block: () => undefined } : {}),
     });
 
@@ -312,6 +323,12 @@ export const LikesYouScreen = ({ embedded = false, onChanged }: { embedded?: boo
           <View pointerEvents="none" style={styles.roseBadge}>
             <Ionicons name="rose" size={11} color="#F7D5DF" />
             <Text style={styles.roseBadgeText}>Rose</Text>
+          </View>
+        )}
+        {!item.isRose && !!item.comment && (
+          <View pointerEvents="none" style={styles.roseBadge}>
+            <CommentMark size={12} color="#F7D5DF" />
+            <Text style={styles.roseBadgeText}>Comment</Text>
           </View>
         )}
         {item.isNew && (
@@ -336,22 +353,37 @@ export const LikesYouScreen = ({ embedded = false, onChanged }: { embedded?: boo
             )}
           </View>
         )}
-        {!!item.roseComment && (
+        {!!(item.comment?.text || item.roseComment) && (
+          <View style={styles.noteBlock}>
+          {item.comment ? (
+            // What they answered: your photo, small, or the start of your bio.
+            <View style={styles.aboutRow}>
+              {item.comment.about.kind === "photo" && item.comment.about.photoUrl ? (
+                <Image source={{ uri: item.comment.about.photoUrl }} style={styles.aboutThumb} accessible={false} />
+              ) : (
+                <View style={[styles.aboutThumb, styles.aboutBio]}><Ionicons name="create-outline" size={12} color="#E6CFD5" /></View>
+              )}
+              <Text style={styles.aboutText} numberOfLines={1}>
+                {item.comment.about.kind === "photo" ? "On your photo" : "On your bio"}
+              </Text>
+            </View>
+          ) : null}
           <View style={styles.note}>
-            {containsHidden(item.roseComment, hiddenWords) && !shownNotes.has(item.id)
+            {containsHidden(item.comment?.text ?? item.roseComment ?? "", hiddenWords) && !shownNotes.has(item.id)
               ? <Text style={[styles.noteText, { fontStyle: "italic", color: "#A8A2AA" }]} accessibilityRole="button"
                   onPress={() => setShownNotes((current) => new Set(current).add(item.id))}>Hidden by your Hidden Words · Tap to show</Text>
               : <Text numberOfLines={3} style={styles.noteText}>
-                  “{item.roseComment}”
+                  “{item.comment?.text ?? item.roseComment}”
                 </Text>}
             <Pressable
               onPress={() => reportNote(item)}
               hitSlop={10}
               accessibilityRole="button"
-              accessibilityLabel="Report this note"
+              accessibilityLabel={item.comment ? "Report this comment" : "Report this note"}
             >
               <Ionicons name="ellipsis-horizontal" size={16} color="#AAAAB4" />
             </Pressable>
+          </View>
           </View>
         )}
         <View style={styles.actions}>
@@ -644,7 +676,12 @@ const styles = StyleSheet.create({
   likesTitle: { color: "#FFFFFF", fontSize: 16, fontFamily: "DMSans_700Bold" },
   roseBadge: { position: "absolute", top: 10, left: 10, minHeight: 20, flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 10, backgroundColor: "#653344" },
   roseBadgeText: { color: "#F7D5DF", fontSize: 10, lineHeight: 14, fontFamily: "DMSans_700Bold" },
-  note: { flexDirection: "row", alignItems: "flex-start", gap: 6, paddingHorizontal: 10, paddingTop: 12, paddingBottom: 2 },
+  noteBlock: { paddingTop: 10 },
+  aboutRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10 },
+  aboutThumb: { width: 20, height: 26, borderRadius: 5, backgroundColor: "#3A3337" },
+  aboutBio: { alignItems: "center", justifyContent: "center" },
+  aboutText: { flex: 1, color: "#A8A2AA", fontFamily: "DMSans_500Medium", fontSize: 11 },
+  note: { flexDirection: "row", alignItems: "flex-start", gap: 6, paddingHorizontal: 10, paddingTop: 6, paddingBottom: 2 },
   noteText: { flex: 1, color: "#E6CFD5", fontFamily: "DMSans_400Regular", fontSize: 12, lineHeight: 17 },
   actions: { flexDirection: "row", alignItems: "center", gap: 6, padding: 8 },
   passButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center", borderRadius: 22, backgroundColor: "#333130" },

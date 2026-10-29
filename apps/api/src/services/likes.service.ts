@@ -1,3 +1,4 @@
+import { LikeCommentService, type CommentShown } from './like-comment.service';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../utils/prisma';
 import { HttpError } from '../utils/httpError';
@@ -218,12 +219,14 @@ export class LikesService {
   private static async cards(meId: string, rows: Incoming[], seen: Date) {
     const out = new Map<string, ReturnType<typeof publicProfile> & {
       likedAt: string; isRose: boolean; roseId: string | null; roseComment: string | null; isNew: boolean;
+      comment: CommentShown | null;
     }>();
     if (!rows.length) return out;
-    const [viewer, profiles, config] = await Promise.all([
+    const [viewer, profiles, config, comments] = await Promise.all([
       prisma.user.findUniqueOrThrow({ where: { id: meId }, select: discoveryProfileSelect }),
       prisma.user.findMany({ where: { id: { in: rows.map((row) => row.id) } }, select: discoveryProfileSelect }),
       AlgorithmConfigService.get(),
+      LikeCommentService.received(meId, rows.map((row) => row.id)),
     ]);
     for (const row of rows) {
       const profile = profiles.find((entry) => entry.id === row.id);
@@ -234,6 +237,8 @@ export class LikesService {
         isRose: !!row.rose_id,
         roseId: row.rose_id,
         roseComment: row.rose_comment,
+        // A comment on a photo or the bio; for a Rose sent with one, the same words as roseComment.
+        comment: comments.get(row.id) ?? null,
         // Arrived since you last opened Likes You: a "New" mark on the card.
         isNew: row.liked_at > seen,
       });

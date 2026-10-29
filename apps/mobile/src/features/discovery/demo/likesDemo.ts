@@ -1,5 +1,6 @@
 import { demoProfiles } from "./demoProfiles";
 import type { ExploreProfile } from "../components/ExploreProfileCard";
+import type { CommentShown } from "../comments/commentTypes";
 
 /**
  * Local data for the Likes You and Standouts demos (development builds only,
@@ -11,6 +12,7 @@ export type DemoLike = ExploreProfile & {
   isRose: boolean;
   roseId: string | null;
   roseComment: string | null;
+  comment: CommentShown | null;
   isNew: boolean;
 };
 
@@ -25,7 +27,7 @@ const demoCompatibility: Record<string, number> = {
   alexandria: 54,
 };
 
-function like(id: string, minutes: number, rose?: { comment: string | null }): DemoLike | null {
+function like(id: string, minutes: number, rose?: { comment: string | null }, comment?: CommentShown): DemoLike | null {
   const profile = byId(id);
   if (!profile) return null;
   return {
@@ -36,19 +38,27 @@ function like(id: string, minutes: number, rose?: { comment: string | null }): D
     isRose: !!rose,
     roseId: rose ? `demo-rose-${id}` : null,
     roseComment: rose?.comment ?? null,
+    comment: comment ?? null,
     // Arrived in the last hour: shown as new, as a real unseen Like is.
     isNew: minutes <= 60,
   };
 }
 
-/** Two Roses (one with a note) and four Likes, in the server's shape. */
-export function demoLikes() {
+/**
+ * Two Roses (one with a note on your photo) and four Likes (one with a
+ * comment on your bio), in the server's shape. `ownPhoto` is yours, so the
+ * comment shows the photo it answered.
+ */
+export function demoLikes(ownPhoto?: string | null) {
+  const festNote = "Your photo from the fest made me smile — what were you laughing at?";
   const roses = [
-    like("aanya", 50, { comment: "Your photo from the fest made me smile — what were you laughing at?" }),
+    like("aanya", 50, { comment: festNote },
+      { id: "demo-comment-aanya", text: festNote, about: { kind: "photo", photoUrl: ownPhoto ?? null } }),
     like("maya", 400, { comment: null }),
   ].filter((entry): entry is DemoLike => !!entry);
   const likes = [
-    like("rohan", 10),
+    like("rohan", 10, undefined,
+      { id: "demo-comment-rohan", text: "Okay but which canteen has the best chai? I need to know", about: { kind: "bio", text: "Chai first, then everything else." } }),
     like("subh", 700),
     like("alexandria", 2400),
   ].filter((entry): entry is DemoLike => !!entry);

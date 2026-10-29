@@ -9,6 +9,7 @@ import { interestSignals } from "./reciprocity.service";
 import { OUTBOX_TOPICS, OutboxService } from "./outbox.service";
 import { AccountEventService } from "./account-event.service";
 import { RoseService } from "./rose.service";
+import { type CommentAbout, LikeCommentService } from "./like-comment.service";
 import { LIKE_GRACE_MS, LikesService } from "./likes.service";
 import { REWIND_WINDOW_SECONDS } from "./rewind.service";
 export class SwipeService {
@@ -17,6 +18,8 @@ export class SwipeService {
     targetId: string,
     action: "like" | "pass",
     rose?: { comment?: string | null },
+    /** A comment on one photo or the bio, sent with this Like (like-comment.service.ts). */
+    note?: { comment: string; about: CommentAbout },
   ) {
     if (viewerId === targetId || !["like", "pass"].includes(action))
       throw new HttpError(400, "Invalid swipe");
@@ -25,6 +28,15 @@ export class SwipeService {
       throw new HttpError(400, "A Rose can only be sent with a Like", "ROSE_REQUIRES_LIKE");
     // Checked before the transaction, so a refused note never spends the Rose
     // (STANDOUTS_LIKES_SPEC.md 4.5).
+    if (note && action !== "like")
+      throw new HttpError(400, "A comment can only be sent with a Like", "COMMENT_REQUIRES_LIKE");
+    if (note) {
+      LikeCommentService.check(note.comment);
+      if (!(await LikeCommentService.available()))
+        throw new HttpError(503, "Comments aren't available yet. Send a Like without one.", "COMMENTS_UNAVAILABLE");
+    }
+    // Read once, outside the transaction: the match below looks for a comment only once the table exists.
+    const commentsReady = await LikeCommentService.available();
     if (rose?.comment) {
       const verdict = checkNote(rose.comment);
       if (!verdict.ok)
@@ -57,6 +69,12 @@ export class SwipeService {
             );
           // A Rose has to be the first move: a Like already sent can't become
           // one later (Hinge's rule). A retried Rose request is still a replay.
+          // A comment, like a Rose, rides on the first Like only.
+          if (note && !rose) {
+            const sent = await tx.likeComment.findUnique({ where: { swipeId: previous.id }, select: { id: true } });
+            if (!sent)
+              throw new HttpError(409, "You already liked this person.", "COMMENT_NOT_FIRST");
+          }
           if (rose) {
             const spent = await tx.rose.findFirst({ where: { swipeId: previous.id }, select: { id: true } });
             if (!spent)
@@ -138,6 +156,8 @@ export class SwipeService {
         // Before verifying: 25 likes a day, and none once the profile has
         // paused (GOOGLE_SIGNUP_PLAN.md 2.2, 2.6). A pass is always allowed.
         if (action === "like") await VerificationLimitsService.requireCanLike(tx, viewer);
+        // The photo or bio is checked before anything is spent or written.
+        const about = note ? await LikeCommentService.resolve(tx, targetId, note.about) : null;
         // The Rose is checked and spent inside this transaction, before the
         // swipe row exists, so a refusal here leaves no Like and no deduction.
         const spent = rose ? await RoseService.spendWithin(tx, viewerId, targetId, rose.comment ?? null) : null;
@@ -146,6 +166,8 @@ export class SwipeService {
           data: { swiperId: viewerId, targetId, action, targetSignals: interestSignals(target) },
         });
         if (spent) await RoseService.recordWithin(tx, viewerId, targetId, swipe.id, spent.comment);
+        if (note && about)
+          await LikeCommentService.recordWithin(tx, { swipeId: swipe.id, senderId: viewerId, recipientId: targetId, comment: note.comment, about });
         await tx.userScore.upsert({
           where: { userId: viewerId },
           create: {
@@ -188,7 +210,7 @@ export class SwipeService {
             data: { user1Id: a, user2Id: b, status: "active" },
           });
           matchId = match.id;
-          await SwipeService.openWithRoseNote(tx, matchId, viewerId, targetId);
+          await SwipeService.openWithRoseNote(tx, matchId, viewerId, targetId, commentsReady);
           await AccountEventService.append(tx, { userIds: [a, b], type: 'conversation.updated', matchId, payload: { reason: 'match_created' } });
           await OutboxService.enqueue(tx, {
             topic: OUTBOX_TOPICS.MATCH_CREATED,
@@ -212,7 +234,8 @@ export class SwipeService {
             topic: OUTBOX_TOPICS.LIKE_RECEIVED,
             aggregateId: swipe.id,
             deduplicationKey: `like.received:${swipe.id}`,
-            payload: { recipientId: targetId, rose: !!spent },
+            // What was commented on, if anything - never the words (4.4).
+            payload: { recipientId: targetId, rose: !!spent, ...(about ? { commented: about.aboutKind } : {}) },
             availableAt: new Date(swipe.createdAt.getTime() + LIKE_GRACE_MS),
           });
         }
@@ -263,8 +286,20 @@ export class SwipeService {
     matchId: string,
     a: string,
     b: string,
+    commentsReady: boolean,
   ) {
-    const note = await tx.rose.findFirst({
+    const comment = !commentsReady ? null : await tx.likeComment.findFirst({
+      where: {
+        OR: [
+          { senderId: a, recipientId: b },
+          { senderId: b, recipientId: a },
+        ],
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    const note = comment
+      ? { id: comment.id, senderId: comment.senderId, recipientId: comment.recipientId, comment: comment.comment }
+      : await tx.rose.findFirst({
       where: {
         OR: [
           { senderId: a, recipientId: b },
@@ -276,6 +311,17 @@ export class SwipeService {
       select: { id: true, senderId: true, recipientId: true, comment: true },
     });
     const content = note?.comment?.trim();
+    const roseWith = comment
+      ? await tx.rose.findFirst({ where: { swipeId: comment.swipeId }, select: { id: true } })
+      : null;
+    const metadata = comment
+      ? {
+          likeNote: true,
+          ...(roseWith ? { roseNote: true, roseId: roseWith.id } : {}),
+          commentId: comment.id,
+          about: LikeCommentService.shown(comment).about,
+        }
+      : { roseNote: true, roseId: note?.id };
     if (!note || !content) return;
     const session = await tx.chatSession.upsert({
       where: { matchId },
@@ -290,7 +336,7 @@ export class SwipeService {
         content,
         type: "text",
         messageSeq: session.lastMessageSeq,
-        metadata: { roseNote: true, roseId: note.id },
+        metadata,
       },
       select: { id: true, messageSeq: true },
     });

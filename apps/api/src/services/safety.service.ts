@@ -1,3 +1,4 @@
+import { LikeCommentService } from './like-comment.service';
 import { PushService } from './push.service';
 import { IdentityBanService } from './identity-ban.service';
 import { Prisma } from '@prisma/client';
@@ -27,7 +28,7 @@ export class SafetyService {
    */
   static async fileReport(
     reporterId: string,
-    data: { reportedUserId: string; matchId?: string; reason: string; description?: string; sourceType?: 'profile' | 'message' | 'story' | 'rose'; sourceId?: string }
+    data: { reportedUserId: string; matchId?: string; reason: string; description?: string; sourceType?: 'profile' | 'message' | 'story' | 'rose' | 'comment'; sourceId?: string }
   ) {
     if (reporterId === data.reportedUserId) {
       throw new HttpError(400, 'You cannot report your own account', 'INVALID_REPORT');
@@ -74,6 +75,17 @@ export class SafetyService {
       });
       if (!rose) throw new HttpError(404, 'Report context is unavailable', 'REPORT_CONTEXT_UNAVAILABLE');
       evidenceSnapshot = { comment: rose.comment, sentAt: rose.createdAt.toISOString() };
+    }
+
+    if (data.sourceType === 'comment') {
+      // Like a Rose note: only the person it was sent to can report a comment.
+      if (!data.sourceId) throw new HttpError(400, 'Comment report context is incomplete', 'REPORT_CONTEXT_INVALID');
+      const comment = !(await LikeCommentService.available()) ? null : await prisma.likeComment.findFirst({
+        where: { id: data.sourceId, senderId: data.reportedUserId, recipientId: reporterId },
+        select: { comment: true, aboutKind: true, aboutPhotoUrl: true, aboutText: true, createdAt: true },
+      });
+      if (!comment) throw new HttpError(404, 'Report context is unavailable', 'REPORT_CONTEXT_UNAVAILABLE');
+      evidenceSnapshot = { comment: comment.comment, about: comment.aboutKind, aboutPhotoUrl: comment.aboutPhotoUrl, aboutText: comment.aboutText, sentAt: comment.createdAt.toISOString() };
     }
 
     // Every report keeps the profile as it was (name, bio, photos), so changing

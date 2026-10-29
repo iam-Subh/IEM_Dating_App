@@ -34,9 +34,9 @@ const interestColors: Record<string, { colors: readonly [string, string]; text: 
   Clubs: { colors: ['#E4F2EC', '#C9E3D8'], text: '#29483C' },
   'Favourite hangouts': { colors: ['#F8EDDA', '#EBD8BC'], text: '#493A27' },
 };
-export function ProfileContentCard({ title, icon, children }: { title: string; icon: string; children: React.ReactNode }) {
+export function ProfileContentCard({ title, icon, children, action }: { title: string; icon: string; children: React.ReactNode; action?: React.ReactNode }) {
   return <LinearGradient colors={sectionColors[title] ?? ['#282828', '#222222']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={s.section}>
-    <View style={s.sectionHeading}><ProfileFieldIcon name={icon} size={18} color={PINK} /><Text style={s.sectionTitle}>{title}</Text></View>
+    <View style={s.sectionHeading}><ProfileFieldIcon name={icon} size={18} color={PINK} /><Text style={s.sectionTitle}>{title}</Text>{action ? <View style={s.sectionAction}>{action}</View> : null}</View>
     {children}
   </LinearGradient>;
 }
@@ -64,15 +64,17 @@ function Facts({ values }: { values: PreviewFact[] }) {
   </View>)}</View>;
 }
 
-export function ProfileContentSections({ data, afterSection, showInterestIcons = true }: {
+export function ProfileContentSections({ data, afterSection, showInterestIcons = true, bioAction }: {
   data: ReturnType<typeof buildProfilePreview>;
   afterSection?: (section: 'bio' | 'campus' | 'interests' | 'lifestyle') => React.ReactNode;
   showInterestIcons?: boolean;
+  /** Beside the Bio title: the open profile's comment button. */
+  bioAction?: React.ReactNode;
 }) {
   const interestGroups = data.interestGroups.filter(group => group.title === 'Things I like');
   const communityGroups = data.interestGroups.filter(group => group.title !== 'Things I like');
   return <>
-      {!!data.bio && <ProfileContentCard title="Bio" icon="create-outline"><Text style={s.bio}>{data.bio}</Text></ProfileContentCard>}
+      {!!data.bio && <ProfileContentCard title="Bio" icon="create-outline" action={bioAction}><Text style={s.bio}>{data.bio}</Text></ProfileContentCard>}
       {afterSection?.('bio')}
       {data.basics.length > 0 && <ProfileContentCard title="About me" icon={ABOUT_ME_ICONS.section}><Facts values={data.basics} /></ProfileContentCard>}
       {(data.college || data.course || data.campus.length > 0) && <ProfileContentCard title="Campus life" icon={CAMPUS_ICONS.section}>
@@ -121,6 +123,7 @@ const s = StyleSheet.create({
   flex: { flex: 1, minWidth: 0 },
   section: { padding: 14, borderRadius: 18, backgroundColor: '#222222', gap: 12 },
   sectionHeading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sectionAction: { marginLeft: 'auto', marginVertical: -8 },
   sectionTitle: { fontFamily: 'DMSans_700Bold', fontSize: 17, lineHeight: 23, color: '#FFF4F6' },
   bio: { fontFamily: 'DMSans_400Regular', fontSize: 16, lineHeight: 25, color: '#E0DAD5' },
   facts: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 12, rowGap: 16 },

@@ -44,6 +44,7 @@ import {
   sharedInterestLabels,
 } from "./profile-detail/ProfileDetailModal";
 import type { VideoPlayer } from "expo-video";
+import type { CommentAbout } from "../comments/commentTypes";
 
 interface SwipeCardProps {
   user: {
@@ -71,6 +72,10 @@ interface SwipeCardProps {
   roseOverlay?: React.ReactNode;
   /** Back button while the Rose sheet is open: true when it closed the sheet. */
   onRoseOverlayBack?: () => boolean;
+  /** Comment on a photo or the bio from the expanded profile (comments/CommentSheet). */
+  onComment?: (about: CommentAbout, sendLike: () => void) => void;
+  /** Room kept free at the bottom for action buttons floating on the card. */
+  actionsInset?: number;
   isActiveCard?: boolean;
   gesturePaused?: SharedValue<boolean>;
   prepareVideo?: boolean;
@@ -81,6 +86,8 @@ interface SwipeCardProps {
   onExpansionChange?: (expanded: boolean) => void;
   /** The expanded profile has started folding back into this card. */
   onCollapseStart?: () => void;
+  /** The arrow that opens the profile, so a tip can point at exactly it. */
+  expandRef?: React.Ref<View>;
 }
 
 /** One bar segment: full before the shown media, filling on it, empty after. */
@@ -118,6 +125,7 @@ function MediaProgressSegment({
 
 export const SwipeCard: React.FC<SwipeCardProps> = ({
   user,
+  expandRef,
   onLike,
   onPass,
   onStar,
@@ -125,6 +133,8 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
   roseBalance,
   roseOverlay,
   onRoseOverlayBack,
+  onComment,
+  actionsInset = 0,
   isActiveCard = true,
   gesturePaused,
   prepareVideo = true,
@@ -466,7 +476,7 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
 
   const sharedInterests = sharedInterestLabels(user);
   const cardInfo = (
-    <View style={styles.infoOverlay}>
+    <View style={[styles.infoOverlay, actionsInset ? { bottom: 20 + actionsInset } : null]}>
       <View style={styles.infoContentContainer}>
         <View style={styles.textContentContainer}>
           {/* ROW 1: Name, Year, Verification */}
@@ -489,6 +499,7 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
         </View>
 
         <TouchableOpacity
+          ref={expandRef}
           style={styles.expandCircle}
           activeOpacity={0.8}
           onPress={openProfile}
@@ -833,6 +844,7 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
         roseBalance={roseBalance}
         overlay={roseOverlay}
         onOverlayBack={onRoseOverlayBack}
+        onComment={onComment}
         onReport={onReport}
         onBlock={onBlock}
       />
@@ -849,7 +861,7 @@ const styles = StyleSheet.create({
   },
   card: {
     flex: 1,
-    borderRadius: 14,
+    borderRadius: 22,
     overflow: "hidden",
     backgroundColor: "#000",
     width: "100%",

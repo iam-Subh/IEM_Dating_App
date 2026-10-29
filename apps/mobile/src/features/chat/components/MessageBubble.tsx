@@ -1616,6 +1616,8 @@ export const MessageBubble = React.memo(({ message, isMe, currentUserId, groupPo
             </Text>
           </View>
         ) : null}
+        {/* A comment on a photo or the bio that opened this match: what it answered, then the words. */}
+        {message.metadata?.likeNote ? <CommentAboutCard metadata={message.metadata} isMe={isMe} /> : null}
         {message.replyToId && (
           <TouchableOpacity
             activeOpacity={0.72}
@@ -1862,6 +1864,30 @@ export const MessageBubble = React.memo(({ message, isMe, currentUserId, groupPo
   );
 });
 
+
+/** What a first-message comment answered (like-comment.service.ts): their photo, or the start of their bio. */
+function CommentAboutCard({ metadata, isMe }: { metadata: Record<string, unknown>; isMe: boolean }) {
+  const about = metadata.about as { kind?: string; photoUrl?: string | null; text?: string | null } | undefined;
+  if (!about || (about.kind !== 'photo' && about.kind !== 'bio')) return null;
+  const what = about.kind === 'photo' ? 'photo' : 'bio';
+  const label = `${isMe ? 'Your comment on their' : 'Commented on your'} ${what}`;
+  return (
+    <View style={[styles.commentAbout, isMe && styles.commentAboutMe]} accessibilityLabel={label}>
+      {about.kind === 'photo' && about.photoUrl ? (
+        <Image source={{ uri: about.photoUrl }} style={styles.commentThumb} accessible={false} />
+      ) : (
+        <View style={[styles.commentQuoteBar, isMe && styles.commentQuoteBarMe]} />
+      )}
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={[styles.commentLabel, isMe && styles.commentLabelMe]}>{label}</Text>
+        {about.kind === 'bio' && !!about.text ? (
+          <Text numberOfLines={2} style={[styles.commentQuote, isMe && styles.commentQuoteMe]}>{about.text}</Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   sensitiveCover: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 5, elevation: 5, backgroundColor: '#2C2C2E', alignItems: 'center', justifyContent: 'center', padding: 12 },
   sensitiveTitle: { marginTop: 8, color: '#FFF', fontSize: 14, fontWeight: '600', textAlign: 'center' },
@@ -1877,6 +1903,15 @@ const styles = StyleSheet.create({
   sendFailureDetail: { color: '#C8B5BA', fontSize: 11, lineHeight: 15, marginTop: 2 },
   sendFailureRetry: { color: '#F3C1CA', fontSize: 12, fontWeight: '700' },
   roseNoteTag: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingTop: 8 },
+  commentAbout: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 8, marginTop: 8, padding: 6, borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.06)', maxWidth: 240 },
+  commentAboutMe: { backgroundColor: 'rgba(255,255,255,0.14)' },
+  commentThumb: { width: 36, height: 46, borderRadius: 8, backgroundColor: '#3A3337' },
+  commentQuoteBar: { width: 3, alignSelf: 'stretch', borderRadius: 2, backgroundColor: '#E0457B' },
+  commentQuoteBarMe: { backgroundColor: '#FFD6E3' },
+  commentLabel: { fontSize: 11, fontWeight: '700', color: '#E0457B' },
+  commentLabelMe: { color: '#FFD6E3' },
+  commentQuote: { fontSize: 12, lineHeight: 16, fontStyle: 'italic', color: '#6E6268' },
+  commentQuoteMe: { color: '#FFE9F0' },
   roseNoteText: { fontSize: 11, fontWeight: '700', color: '#E0457B' },
   roseNoteTextMe: { color: '#FFD6E3' },
   voiceRate: { position: 'absolute', top: 5, right: 9, minWidth: 28, height: 18, borderRadius: 9, backgroundColor: 'rgba(0,0,0,0.22)', alignItems: 'center', justifyContent: 'center' },

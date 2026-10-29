@@ -93,13 +93,15 @@ export function useRoses() {
    * explained the refusal, so callers only handle the happy path.
    */
   const send = useCallback(
-    async (targetId: string, comment: string | null, options?: {onTrialRoseSpent?: () => void}) => {
+    async (targetId: string, comment: string | null, options?: {onTrialRoseSpent?: () => void; about?: {kind: "photo"; photoUrl: string} | {kind: "bio"}}) => {
       try {
         const response = await api.post("/discover/swipe", {
           targetId,
           action: "like",
           rose: true,
           ...(comment ? { comment } : {}),
+          // Sent from the comment sheet: what the note is about (a photo, or the bio).
+          ...(comment && options?.about ? { about: options.about } : {}),
         });
         // A replayed swipe spent nothing on the server, so read rather than guess.
         if (response.data.data?.repeated) void refreshShared();

@@ -988,6 +988,7 @@ model Swipe {
   action        String   @db.VarChar(10)
   createdAt     DateTime @default(now()) @map("created_at")
   swiper        User     @relation("SwipesMade", fields: [swiperId], references: [id], onDelete: Cascade)
+  comment       LikeComment?
   target        User     @relation("SwipesReceived", fields: [targetId], references: [id], onDelete: Cascade)
 
   @@unique([swiperId, targetId])
@@ -1229,6 +1230,26 @@ model DiscoveryReceipt {
   @@index([deliveredAt])
   @@index([candidateId, visibleAt])
   @@map("discovery_receipts")
+}
+
+/// A comment sent with a Like (or a Rose) about one photo or the bio: on the
+/// recipient's Likes You, and the first chat message if they match.
+model LikeComment {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  swipeId       String   @unique @map("swipe_id") @db.Uuid
+  senderId      String   @map("sender_id") @db.Uuid
+  recipientId   String   @map("recipient_id") @db.Uuid
+  comment       String   @db.VarChar(140)
+  /// 'photo' or 'bio'.
+  aboutKind     String   @map("about_kind") @db.VarChar(10)
+  aboutPhotoId  String?  @map("about_photo_id") @db.Uuid
+  aboutPhotoUrl String?  @map("about_photo_url") @db.VarChar(500)
+  aboutText     String?  @map("about_text") @db.VarChar(160)
+  createdAt     DateTime @default(now()) @map("created_at")
+  swipe         Swipe    @relation(fields: [swipeId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, senderId, createdAt(sort: Desc)], map: "like_comments_recipient_sender_idx")
+  @@map("like_comments")
 }
 
 /// One Rose: a higher-priority Like that sits at the top of the recipient's

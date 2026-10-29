@@ -1,3 +1,4 @@
+import { Shimmer } from "../../../../components/Shimmer";
 import React, { useEffect, useRef, useState } from "react";
 import { openReport } from "../../../safety/ReportSheet";
 import {
@@ -38,6 +39,11 @@ import { buildProfilePreview } from "../../../../screens/main/profile/profilePre
 import { ProfileIntentionCard } from "../../../../components/ProfileIntentionCard";
 import { RoseSentCelebration, type RoseConfirmation } from "./RoseSentCelebration";
 import { PreparedPhotos } from "../../media/PreparedPhotos";
+import { ProfilePhotoViewer } from "./ProfilePhotoViewer";
+import type { PhotoLightboxFrame } from "./photoLightboxGeometry";
+import { rememberPreviewPhoto } from "../../../auth/onboarding/photoPreviewCache";
+import { CommentButton } from "../../comments/CommentButton";
+import type { CommentAbout } from "../../comments/commentTypes";
 import { INTEREST_CATEGORIES } from "@iem-dating/shared/interest-catalog";
 import { placeLine } from "../../../location/cardLabels";
 
@@ -155,27 +161,41 @@ function LazyProfilePhoto({
   offset,
   loadLine,
   realPersonName,
+  onComment,
+  onOpen,
 }: {
   uri: string;
   offset: number;
   loadLine: number;
   /** Set when the person passed the real-person check: shows the mark. */
   realPersonName?: string;
+  /** Comment on this photo; absent where there is nothing to like. */
+  onComment?: () => void;
+  onOpen: (frame: PhotoLightboxFrame) => void;
 }) {
+  const photoRef = useRef<View>(null);
   const [top, setTop] = useState<number | null>(null);
   const [armed, setArmed] = useState(false);
+  const [ready, setReady] = useState(false);
   useEffect(() => {
     if (!armed && top !== null && offset + top < loadLine) setArmed(true);
   }, [armed, loadLine, offset, top]);
   return (
-    <View
+    <View ref={photoRef} collapsable={false}
       style={[styles.detailPhoto, { overflow: "hidden", backgroundColor: "#1B1C1E" }]}
       onLayout={(event) => setTop(event.nativeEvent.layout.y)}
     >
+      {/* Until it has arrived - before it scrolls near, and while it downloads. */}
+      {!ready ? <Shimmer style={StyleSheet.absoluteFill} delay={0} /> : null}
       {armed ? (
-        <Image source={{ uri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+        <Pressable onPress={() => photoRef.current?.measureInWindow((x, y, width, height) => {if (width > 0 && height > 0) onOpen({x, y, width, height});})} accessibilityRole="imagebutton" accessibilityLabel="Open photo" accessibilityHint="Opens this photo. Double-tap in the viewer to zoom." style={StyleSheet.absoluteFill}>
+          <Image source={{ uri }} style={StyleSheet.absoluteFill} resizeMode="cover" onLoad={event => {rememberPreviewPhoto(uri, event.nativeEvent.source); setReady(true);}} onError={() => setReady(true)} />
+        </Pressable>
       ) : null}
       {armed && !!realPersonName && <RealPersonMark name={realPersonName} />}
+      {onComment ? (
+        <View style={styles.photoComment}><CommentButton onPress={onComment} label="Comment on this photo" /></View>
+      ) : null}
     </View>
   );
 }
@@ -208,6 +228,12 @@ interface Props {
   /** No Like/Pass bar: viewing a match's or follower's profile, where swiping on them means nothing. */
   readOnly?: boolean;
   onSuperLike?: () => void;
+  /**
+   * Comment on one photo or the bio (comments/CommentSheet). `sendLike`
+   * folds the profile back and likes, as the Like button does, for when
+   * the comment is sent.
+   */
+  onComment?: (about: CommentAbout, sendLike: () => void) => void;
   /** Sends a Rose instead of a Like. Absent means this surface has no Roses. */
   onRose?: () => void | Promise<void>;
   /** Roses left this week; 0 still shows the button, so it can explain itself. */
@@ -266,6 +292,13 @@ interface Props {
  */
 const PHOTO_OPEN = { duration: 360, easing: Easing.bezier(0.2, 0.9, 0.25, 1) };
 const PHOTO_CLOSE = { duration: 320, easing: Easing.bezier(0.3, 0.05, 0.2, 1) };
+/**
+ * A Discovery card growing into the profile, and folding back: Material's
+ * emphasized curve - quick off the mark, a long gentle settle - which reads as
+ * smoother than a short ease-out. Closing is a little quicker than opening.
+ */
+const CARD_OPEN = { duration: 300, easing: Easing.bezier(0.2, 0, 0, 1) };
+const CARD_CLOSE = { duration: 260, easing: Easing.bezier(0.2, 0, 0, 1) };
 /** The carousel card's corner radius, which the flying photo starts from. */
 const PHOTO_CARD_RADIUS = 22;
 /** The profile photo's corner radius (styles.hero), where it lands. */
@@ -282,6 +315,7 @@ function ProfileDetailContent({
   onLike,
   onPass,
   onRose,
+  onComment,
   roseBalance,
   roseConfirmation,
   readOnly,
@@ -348,6 +382,7 @@ function ProfileDetailContent({
   const [expanded, setExpanded] = useState(false);
   const [loadExtraMedia, setLoadExtraMedia] = useState(false);
   const [showVideo, setShowVideo] = useState(!!initialVideoPlayer);
+  const [photoViewer, setPhotoViewer] = useState<{uri: string; origin: PhotoLightboxFrame} | null>(null);
   // The expanded profile mounts its own video view fresh every time it opens
   // (this whole component remounts with it), so it always needs at least one
   // frame before it has anything to show - the shared player being warm from
@@ -521,8 +556,11 @@ function ProfileDetailContent({
   }));
   const revealStyle = useAnimatedStyle(() => ({
     opacity: avatarTransition || photoTransition ? 1 : Math.max(0, (progress.value - 0.2) / 0.8) * detailsVisible.value,
-    // The shrinking frame clips these sections. Keep their layout stable
-    // instead of removing them halfway through the return animation.
+    // Folding back into the card: the details leave layout the moment the
+    // fold starts. They are fading out anyway, and while they stayed laid out
+    // every frame's new photo height re-laid out the whole long page below it
+    // (bio, cards, gallery) - the stutter on Back and the down chevron.
+    display: collapsing.value === 1 && !avatarTransition && !photoTransition ? ("none" as const) : ("flex" as const),
   }));
   const actionsDismissed = useSharedValue(0);
   const actionsStyle = useAnimatedStyle(() => ({
@@ -599,15 +637,15 @@ function ProfileDetailContent({
     }
     progress.value = withTiming(
       1,
-      { duration: avatarTransition ? 160 : 180, easing: Easing.out(Easing.cubic) },
+      avatarTransition ? { duration: 160, easing: Easing.out(Easing.cubic) } : CARD_OPEN,
       (finished) => {
         if (finished) runOnJS(finishOpen)();
       },
     );
   };
   useEffect(() => {
-    onPlaybackChange?.(expanded && heroVisible);
-  }, [expanded, heroVisible, onPlaybackChange]);
+    onPlaybackChange?.(expanded && heroVisible && !photoViewer);
+  }, [expanded, heroVisible, photoViewer, onPlaybackChange]);
   useEffect(() => {
     if (selectedMediaType) setShowVideo(selectedMediaType === "video");
   }, [selectedMediaType, selectedMediaUri]);
@@ -621,9 +659,9 @@ function ProfileDetailContent({
     // here can pause a new selection using the previous showVideo state.
     if (selectedMediaType) return;
     if (!initialVideoPlayer) return;
-    if (expanded && heroVisible && showVideo) initialVideoPlayer.play();
+    if (expanded && heroVisible && showVideo && !photoViewer) initialVideoPlayer.play();
     else initialVideoPlayer.pause();
-  }, [expanded, heroVisible, showVideo, initialVideoPlayer, selectedMediaType]);
+  }, [expanded, heroVisible, showVideo, photoViewer, initialVideoPlayer, selectedMediaType]);
   const busyRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const shared = sharedInterestLabels(user);
@@ -709,7 +747,7 @@ function ProfileDetailContent({
       collapsing.value = 1;
       progress.value = withTiming(
         0,
-        { duration: avatarTransition ? 180 : 300, easing: Easing.bezier(0.22, 0.61, 0.36, 1) },
+        avatarTransition ? { duration: 180, easing: Easing.bezier(0.22, 0.61, 0.36, 1) } : CARD_CLOSE,
         (finished) => {
           if (finished) runOnJS(finishCollapse)();
         },
@@ -741,6 +779,10 @@ function ProfileDetailContent({
     pendingDecision.current = callback;
     close();
   };
+  // A comment rides on a Like, so it is offered only where there is one.
+  const canComment = !readOnly && !!onComment && !!onLike;
+  const comment = (about: CommentAbout) => onComment?.(about, () => { if (onLike) decide(onLike); });
+  const heroUri = selectedMediaUri ?? photos[photo] ?? firstPhoto;
   const galleryPhotos = photos.slice(1);
   const bodyTop = targetHeroHeight + 12;
   const renderGalleryPhoto = (slot: number) => {
@@ -748,7 +790,9 @@ function ProfileDetailContent({
     if (!uri || !loadExtraMedia) return null;
     return (
       <LazyProfilePhoto key={uri} uri={uri} offset={bodyTop} loadLine={loadLine}
-        realPersonName={user.realPerson ? user.name : undefined} />
+        onOpen={origin => setPhotoViewer({uri, origin})}
+        realPersonName={user.realPerson ? user.name : undefined}
+        onComment={canComment ? () => comment({ kind: "photo", photoUrl: uri }) : undefined} />
     );
   };
   const closeGesture = PanResponder.create({
@@ -860,9 +904,7 @@ function ProfileDetailContent({
         <Animated.View style={headerStyle}>
           <View style={styles.profileHeader}>
             <View style={{ flex: 1 }}>
-              <View
-                style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
-              >
+              <View style={styles.headerIdentity}>
                 <Text
                   numberOfLines={1}
                   style={[styles.headerName, { flexShrink: 1 }]}
@@ -874,17 +916,12 @@ function ProfileDetailContent({
                   <View
                     accessible
                     accessibilityLabel="Verified profile"
-                    style={{
-                      width: 20,
-                      height: 20,
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
+                    style={styles.headerVerification}
                   >
                     <VerifiedBadge />
                   </View>
                 )}
-                {/* No badge, no label: tapping the empty spot explains (GOOGLE_SIGNUP_PLAN.md 3). */}
+                {/* The info icon explains why this profile has no blue badge. */}
                 {!user.blueBadge && (
                   <Pressable
                     accessibilityRole="button"
@@ -896,9 +933,9 @@ function ProfileDetailContent({
                         ? `The blue badge means a verified college email and a selfie check. ${user.name.split(" ")[0]} hasn't completed both yet.`
                         : `${user.name.split(" ")[0]} hasn't verified their college yet.`,
                     )}
-                    style={{ width: 20, height: 20, alignItems: "center", justifyContent: "center" }}
+                    style={styles.headerVerification}
                   >
-                    <Ionicons name="information-circle-outline" size={16} color="rgba(255,255,255,0.35)" />
+                    <Ionicons name="information-circle-outline" size={16} color="rgba(255,255,255,0.35)" style={styles.headerInfoIcon} />
                   </Pressable>
                 )}
               </View>
@@ -979,7 +1016,7 @@ function ProfileDetailContent({
             />
             {sheetTransition && photo === photos.indexOf(firstPhoto) && (sheetPhotoPending || sheetPhotoFailed) && (
               <View pointerEvents="none" style={[StyleSheet.absoluteFill, { alignItems: "center", justifyContent: "center", backgroundColor: "#19191B" }]}>
-                {sheetPhotoPending ? <ActivityIndicator color="#FFFFFF" /> : <Ionicons name="image-outline" size={40} color="#777" />}
+                {sheetPhotoPending ? <Shimmer style={StyleSheet.absoluteFill} delay={0} /> : <Ionicons name="image-outline" size={40} color="#777" />}
               </View>
             )}
             {/* Mounted for as long as the profile has a video at all, not only while
@@ -1077,6 +1114,11 @@ function ProfileDetailContent({
               />
             </View>
             {expanded && user.realPerson && <RealPersonMark name={user.name} belowProgress />}
+            {expanded && canComment && !!heroUri && !showVideo && selectedMediaType !== "video" ? (
+              <Animated.View style={[styles.heroComment, revealStyle]}>
+                <CommentButton onPress={() => comment({ kind: "photo", photoUrl: heroUri })} label="Comment on this photo" />
+              </Animated.View>
+            ) : null}
             {mediaProgress && (
               <Animated.View pointerEvents="none" style={barPosition}>
                 {mediaProgress}
@@ -1126,7 +1168,12 @@ function ProfileDetailContent({
                 <ProfileInterestPills values={shared} showIcons />
               </ProfileContentCard>
             )}
-            <ProfileContentSections data={contentData} afterSection={section =>
+            <ProfileContentSections data={contentData}
+              bioAction={canComment && !!contentData.bio ? (
+                <CommentButton variant="section" label="Comment on the bio"
+                  onPress={() => comment({ kind: "bio", text: contentData.bio ?? "" })} />
+              ) : undefined}
+              afterSection={section =>
               renderGalleryPhoto({ bio: 0, campus: 1, interests: 2, lifestyle: 3 }[section])
             } />
             {galleryPhotos.slice(4).map((_, index) => renderGalleryPhoto(index + 4))}
@@ -1254,6 +1301,7 @@ function ProfileDetailContent({
         </Animated.View>
       ) : null}
       {overlay}
+      {photoViewer && <ProfilePhotoViewer uri={photoViewer.uri} origin={photoViewer.origin} name={user.name} onClose={() => setPhotoViewer(null)}/>}
     </Modal>
   );
 }
@@ -1281,7 +1329,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
-  headerName: { color: "#fff", fontSize: 22, fontWeight: "700" },
+  headerIdentity: { flexDirection: "row", alignItems: "center", minHeight: 28, gap: 6 },
+  headerName: { color: "#fff", fontSize: 22, lineHeight: 28, includeFontPadding: false, fontWeight: "700" },
+  headerVerification: { width: 20, height: 28, flexShrink: 0, alignItems: "center", justifyContent: "center" },
+  headerInfoIcon: { lineHeight: 20, includeFontPadding: false },
   headerButton: {
     width: 40,
     height: 40,
@@ -1299,6 +1350,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   photoNavigation: { ...StyleSheet.absoluteFill, flexDirection: "row" },
+  heroComment: { position: "absolute", right: 16, bottom: 16 },
+  photoComment: { position: "absolute", right: 12, bottom: 12 },
   activityBadge: { position: "absolute", top: 32, left: 16, right: 16, alignItems: "flex-start" },
   gradient: { position: "absolute", bottom: 0, width: "100%", height: "42%" },
   heroInfo: { position: "absolute", bottom: 24, left: 22, right: 22 },
