@@ -6,6 +6,14 @@
 # RabbitMQ is left out: the API does not use it.
 name: iem
 
+# Every service's logs are capped (3 files of 10 MB): left alone, Docker's logs
+# grow until the disk is full and the database stops.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -23,6 +31,7 @@ services:
       test: ["CMD-SHELL", "pg_isready -U iem -d iem"]
       interval: 10s
       retries: 10
+    logging: *logging
     restart: unless-stopped
 
   redis:
@@ -32,6 +41,11 @@ services:
     command: redis-server --appendonly yes --maxmemory 96mb --maxmemory-policy volatile-lru
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      retries: 5
+    logging: *logging
     restart: unless-stopped
 
   face:
@@ -40,6 +54,14 @@ services:
     environment:
       # One worker process: each one loads the face models again.
       FACE_PROCESSES: "1"
+    # Loading the models takes a while; after that /health answers at once.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+    logging: *logging
     restart: unless-stopped
 
   api:
@@ -60,9 +82,29 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       face:
         condition: service_started
+    # Migrations run first on every start, so it is given time before it counts as down.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 3
+    logging: *logging
+    restart: unless-stopped
+
+  # Docker restarts a container that exits, not one that hangs: this restarts
+  # any service whose health check keeps failing (an API that stopped answering).
+  autoheal:
+    image: willfarrell/autoheal:1.2.0
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: all
+      AUTOHEAL_INTERVAL: "30"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    logging: *logging
     restart: unless-stopped
 
   # The API's https address - one of the two, chosen with a profile:
@@ -82,7 +124,9 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    logging: *logging
     restart: unless-stopped
 
   tunnel:
@@ -92,7 +136,9 @@ services:
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    logging: *logging
     restart: unless-stopped
 
 volumes:
