@@ -1,0 +1,106 @@
+[
+  {
+    "file": "teach-welcome-campus.png",
+    "prompt": "docs/illustration-prompts/teach-welcome-campus.prompt.txt",
+    "source": "C:\\Users\\subha\\.codex\\generated_images\\01a10648-9530-7922-9246-049e825dff6b\\exec-dc456840-2716-4df0-9985-ea3eda611bed.png",
+    "generator": "OpenAI built-in image_gen.imagegen",
+    "transparent": true,
+    "selected": "Cleaned generation"
+  },
+  {
+    "file": "teach-welcome-rose.png",
+    "prompt": "docs/illustration-prompts/teach-welcome-rose.prompt.txt",
+    "source": "C:\\Users\\subha\\.codex\\generated_images\\01a10648-9530-7922-9246-049e825dff6b\\exec-f7fc82a3-426f-4163-bd2a-280a28b51fc1.png",
+    "generator": "OpenAI built-in image_gen.imagegen",
+    "transparent": true,
+    "selected": "Initial generation"
+  },
+  {
+    "file": "teach-welcome-shield.png",
+    "prompt": "docs/illustration-prompts/teach-welcome-shield.prompt.txt",
+    "source": "C:\\Users\\subha\\.codex\\generated_images\\01a10648-9530-7922-9246-049e825dff6b\\exec-c44b7901-db77-438f-bd71-7de6cc30ba3e.png",
+    "generator": "OpenAI built-in image_gen.imagegen",
+    "transparent": true,
+    "selected": "Initial generation"
+  },
+  {
+    "file": "teach-guide-explore.png",
+    "prompt": "docs/illustration-prompts/teach-guide-explore.prompt.txt",
+    "source": "C:\\Users\\subha\\.codex\\generated_images\\01a10648-9530-7922-9246-049e825dff6b\\exec-9b75585b-337a-45fe-812a-63656fb1a24c.png",
+    "generator": "OpenAI built-in image_gen.imagegen",
+    "transparent": true,
+    "selected": "Initial generation"
+  },
+  {
+    "file": "teach-guide-stories.png",
+    "prompt": "docs/illustration-prompts/teach-guide-stories.prompt.txt",
+    "source": "C:\\Users\\subha\\.codex\\generated_images\\01a10648-9530-7922-9246-049e825dff6b\\exec-6e33e8b7-c9c1-4000-871a-db73ddef709b.png",
+    "generator": "OpenAI built-in image_gen.imagegen",
+    "transparent": true,
+    "selected": "Initial generation"
+  },
+  {
+    "file": "teach-guide-comments.png",
+    "prompt": "docs/illustration-prompts/teach-guide-comments.prompt.txt",
+    "source": "C:\\Users\\subha\\.codex\\generated_images\\01a10648-9530-7922-9246-049e825dff6b\\exec-2f4c231f-3385-4170-8725-261ea755e5f4.png",
+    "generator": "OpenAI built-in image_gen.imagegen",
+    "transparent": true,
+    "selected": "Initial generation"
+  },
+  {
+    "file": "teach-guide-likes.png",
+    "prompt": "docs/illustration-prompts/teach-guide-likes.prompt.txt",
+    "source": "C:\\Users\\subha\\.codex\\generated_images\\01a10648-9530-7922-9246-049e825dff6b\\exec-68142884-bc50-4f34-9c41-1c1516d82eb8.png",
+    "generator": "OpenAI built-in image_gen.imagegen",
+    "transparent": true,
+    "selected": "Initial generation"
+  },
+  {
+    "file": "teach-guide-chats.png",
+    "prompt": "docs/illustration-prompts/teach-guide-chats.prompt.txt",
+    "source": "C:\\Users\\subha\\.codex\\generated_images\\01a10648-9530-7922-9246-049e825dff6b\\exec-608d0971-9de9-43c4-9f85-eaeee58f497a.png",
+    "generator": "OpenAI built-in image_gen.imagegen",
+    "transparent": true,
+    "selected": "Initial generation"
+  },
+  {
+    "file": "teach-guide-verify.png",
+    "prompt": "docs/illustration-prompts/teach-guide-verify.prompt.txt",
+    "source": "C:\\Users\\subha\\.codex\\generated_images\\01a10648-9530-7922-9246-049e825dff6b\\exec-4bd83dbd-73ca-4b40-8380-4f30fc0f8a8a.png",
+    "generator": "OpenAI built-in image_gen.imagegen",
+    "transparent": true,
+    "selected": "Initial generation"
+  },
+  {
+    "file": "teach-guide-hide-place.png",
+    "prompt": "docs/illustration-prompts/teach-guide-hide-place.prompt.txt",
+    "source": "C:\\Users\\subha\\.codex\\generated_images\\01a10648-9530-7922-9246-049e825dff6b\\exec-56404a89-5515-4da6-8d9e-8e0629012107.png",
+    "generator": "OpenAI built-in image_gen.imagegen",
+    "transparent": true,
+    "selected": "Refined: removed unrequested hand"
+  },
+  {
+    "file": "teach-guide-safety.png",
+    "prompt": "docs/illustration-prompts/teach-guide-safety.prompt.txt",
+    "source": "C:\\Users\\subha\\.codex\\generated_images\\01a10648-9530-7922-9246-049e825dff6b\\exec-fdf5e7bb-a072-45e4-9680-e5509f874508.png",
+    "generator": "OpenAI built-in image_gen.imagegen",
+    "transparent": true,
+    "selected": "Initial generation"
+  },
+  {
+    "file": "teach-guide-shake.png",
+    "prompt": "docs/illustration-prompts/teach-guide-shake.prompt.txt",
+    "source": "C:\\Users\\subha\\.codex\\generated_images\\01a10648-9530-7922-9246-049e825dff6b\\exec-0e6370e9-5923-4b10-b313-ddacffa5bf0d.png",
+    "generator": "OpenAI built-in image_gen.imagegen",
+    "transparent": true,
+    "selected": "Refined: removed unrequested hand"
+  },
+  {
+    "file": "teach-guide-cover.png",
+    "prompt": "docs/illustration-prompts/teach-guide-cover.prompt.txt",
+    "source": "C:\\Users\\subha\\.codex\\generated_images\\01a10648-9530-7922-9246-049e825dff6b\\exec-24b9db63-115d-43d9-926d-c0c470ac4f38.png",
+    "generator": "OpenAI built-in image_gen.imagegen",
+    "transparent": true,
+    "selected": "Refined: removed unrequested hand"
+  }
+]

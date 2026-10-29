@@ -1,0 +1,27 @@
+Generator: OpenAI built-in image_gen.imagegen
+Reference: apps/mobile/assets/illustrations/standouts-rose-bouquet.png (style only)
+Output: apps/mobile/assets/illustrations/teach-guide-safety.png
+Dimensions: 1254 x 1254
+Transparent background: true
+Initial generated source: C:\Users\subha\.codex\generated_images\01a10648-9530-7922-9246-049e825dff6b\exec-fdf5e7bb-a072-45e4-9680-e5509f874508.png
+Selected source: C:\Users\subha\.codex\generated_images\01a10648-9530-7922-9246-049e825dff6b\exec-fdf5e7bb-a072-45e4-9680-e5509f874508.png
+Selection: Initial generation
+
+INITIAL PROMPT
+STYLE (applies to the whole set):
+Minimal hand-drawn editorial line art in the same style as the attached reference: clean flowing contours, slightly organic curves, simple flat matte pastel fills, at most one soft flat shade per shape. No 3D rendering, no gradients, no shine, no glow, no texture.
+
+LINE: one consistent outline weight across the whole picture, warm pale-ivory outer contour so the shape stays visible on a warm near-black page (#100F0D), with fine slightly darker warm-brown inner detail lines. Rounded line ends. Never black exterior outlines.
+
+COLOURS (use only these families): dusty pink #E39A9A, blush #F2C1BE, warm amber #F2B45A, sage green #7E9A6B, dusty lavender #8A809E, pale warm ivory #F6E7D6 for skin and paper, warm brown #7A4A44 for inner lines. No neon, no saturated blue except the single verification tick where a picture asks for it (#4A90E2).
+
+PEOPLE: hands and objects only. No faces, no full people, no hair. A hand is natural with coherent five-finger anatomy, pale warm ivory, with a simple sleeve end in dusty lavender and an ivory cuff, as in the reference.
+
+COMPOSITION: one clear subject, centred in a square canvas, silhouette about 80 percent of the height, compact and balanced, readable at 120 pixels. Whole subject visible, nothing cropped, a small clear margin.
+
+OUTPUT: one transparent PNG, 1254 by 1254 pixels, true alpha transparency everywhere outside the drawing, opaque fills inside. No text, letters, numbers, logos, user interface, frame, card, floor, ground shadow, backdrop, scattered sparkles, glitter, confetti or decorative background.
+
+SUBJECT: A hand raised palm-out toward the viewer, fingers together, in a gentle "stop" gesture, with a lavender sleeve and ivory cuff. A small amber padlock, closed, hangs from a short ivory ribbon tied around the wrist. Firm but kind, not angry.
+
+Reference image: style reference only. Create the new subject specified above. Do not copy the reference bouquet. Keep edges clean with no isolated pixels.
+Production edge requirement: clean antialiased curves, no pixel dust, isolated pixels or feathering. Use strictly flat uniform matte fills; do not copy soft shading from the reference.
