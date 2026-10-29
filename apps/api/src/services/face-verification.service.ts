@@ -47,6 +47,14 @@ export const UNSURE_DISTANCE = Number(process.env.FACE_UNSURE_DISTANCE ?? 0.6);
  * the video keep the stricter MATCH_DISTANCE, with the team for the unsure band.
  */
 export const EXTRA_PHOTO_DISTANCE = Number(process.env.FACE_EXTRA_PHOTO_DISTANCE ?? 0.6);
+/**
+ * Past that, up to here, an extra photo goes to the team instead of being
+ * called "not you". A face looking down, under hair, with earphones, can drift
+ * past 0.6 for the same person (one real account: 0.619, while their other
+ * photos were 0.45-0.49); another person is usually 0.8 or more. The main
+ * photo and the video stay strict - they already passed against the selfie.
+ */
+export const EXTRA_PHOTO_REVIEW_DISTANCE = Number(process.env.FACE_EXTRA_PHOTO_REVIEW_DISTANCE ?? 0.75);
 /** Review reasons that come from the photos, not from the selfie itself: a photo change can settle them. */
 const MEDIA_REVIEW_REASONS = ['unsure', 'unsure_after_change'];
 const ACTIONS = ['blink', 'left', 'right', 'smile'] as const;
@@ -88,7 +96,7 @@ const SMILE_GROWTH = 1.06;
  */
 const SMILE_LIFT = 0.015;
 
-export type Face = { box: number[]; descriptor: number[]; eyeOpen: number; yaw: number; smile: number; lift?: number };
+export type Face = { box: number[]; descriptor: number[]; eyeOpen: number; yaw: number; smile: number; lift?: number; frontal?: boolean };
 /** `side`: a face turned to the side, within TURN_DISTANCE - can't be compared closely. */
 export type MediaStatus = 'match' | 'unsure' | 'mismatch' | 'no_face' | 'side';
 type Step = 'straight' | Action;
@@ -216,6 +224,7 @@ function mean(descriptors: number[][]) {
 /** A checked item as it counts now: an extra photo inside EXTRA_PHOTO_DISTANCE is a match. */
 export function effectiveStatus(item: { kind: string; main: boolean; status: MediaStatus; distance: number | null }): MediaStatus {
   if (item.kind === 'photo' && !item.main && item.status === 'unsure' && item.distance !== null && item.distance <= EXTRA_PHOTO_DISTANCE) return 'match';
+  if (item.kind === 'photo' && !item.main && item.status === 'mismatch' && item.distance !== null && item.distance <= EXTRA_PHOTO_REVIEW_DISTANCE) return 'unsure';
   // A side view is fine as an extra photo; the main photo has to show the face, so the team looks.
   if (item.status === 'side') return item.kind === 'photo' && !item.main ? 'match' : 'unsure';
   return item.status;
@@ -228,7 +237,11 @@ export function verdict(faces: Face[], key: number[]): { status: MediaStatus; di
   const rounded = Math.round(best.distance * 1000) / 1000;
   if (best.distance <= MATCH_DISTANCE) return { status: 'match', distance: rounded };
   // A face turned to the side drifts from a front-facing key even for the same person.
-  if (Math.abs(best.face.yaw) >= SIDE_YAW && best.distance <= TURN_DISTANCE) return { status: 'side', distance: rounded };
+  // Turned: measured so, or only the pose-tolerant detector could find it - on
+  // a three-quarter view looking down the landmarks can read as facing front
+  // (one real side photo: yaw 0.04, distance 0.619).
+  const turned = Math.abs(best.face.yaw) >= SIDE_YAW || best.face.frontal === false;
+  if (turned && best.distance <= TURN_DISTANCE) return { status: 'side', distance: rounded };
   return { status: best.distance <= UNSURE_DISTANCE ? 'unsure' : 'mismatch', distance: rounded };
 }
 
@@ -443,7 +456,11 @@ export class FaceVerificationService {
       prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { videoPlaybackUrl: true, profileVideoUrl: true } }),
       prisma.faceMediaCheck.findMany({ where: { userId } }),
     ]);
-    const cached = new Map(known.map((row) => [row.mediaUrl, row]));
+    // A removed photo or video: its old result goes too, so it can't be marked any more.
+    const onProfile = new Set([...photos.map((photo) => photo.photoUrl), user.videoPlaybackUrl, user.profileVideoUrl].filter((url): url is string => !!url));
+    const gone = known.filter((row) => !onProfile.has(row.mediaUrl));
+    if (gone.length) await prisma.faceMediaCheck.deleteMany({ where: { id: { in: gone.map((row) => row.id) } } });
+    const cached = new Map(known.filter((row) => onProfile.has(row.mediaUrl)).map((row) => [row.mediaUrl, row]));
     const items: { url: string; kind: 'photo' | 'video'; main: boolean; status: MediaStatus; distance: number | null }[] = [];
     const toCheck = photos.filter((photo) => all || !cached.has(photo.photoUrl));
     if (toCheck.length) {
@@ -564,8 +581,18 @@ export class FaceVerificationService {
       await deleteSnapshots(open.flatMap((item) => item.snapshotKeys));
       await prisma.faceReviewCase.updateMany({ where: { id: { in: open.map((item) => item.id) } }, data: { status: 'superseded', snapshotKeys: [] } });
     }
-    const next = outcome.status === 'pending_review' ? 'pending_review' : outcome.status;
-    if (next !== current.status || outcome.reason !== current.reason) await this.setStatus(userId, next, outcome.reason, current.failureStreak);
+    // Someone who already passed the selfie keeps the badge while the team looks
+    // at a photo the check isn't sure of - moving a side view to the first spot
+    // must not fade it, nor push them down the decks. The case above still
+    // goes to the team: a reject removes the badge (decide), an approve keeps it.
+    const passed = outcome.status === 'pending_review'
+      && !!(await prisma.user.findUnique({ where: { id: userId }, select: { realPersonPassedAt: true } }))?.realPersonPassedAt;
+    const next = passed ? 'verified' : outcome.status;
+    const reason = passed ? null : outcome.reason;
+    if (next !== current.status || reason !== current.reason) await this.setStatus(userId, next, reason, current.failureStreak);
+    // The marked photos can change while the status stays the same (two
+    // needed fixing, one was removed): the app re-reads the list either way.
+    else announceVerification(userId);
     // N18: was verified, now a photo or the video isn't them - tell them, once.
     if (current.status === 'verified' && next === 'needs_fix') {
       const title = outcome.reason === 'video' ? 'Your video needs a look' : 'One of your photos needs a look';
@@ -618,7 +645,7 @@ export class FaceVerificationService {
 
   /** What the app shows (PHOTO_VERIFICATION_PLAN.md 6, 11). */
   static async status(userId: string) {
-    const [row, checks, required, attempts, photos, user] = await Promise.all([
+    const [row, stored, required, attempts, photos, user] = await Promise.all([
       prisma.faceVerification.findUnique({ where: { userId } }),
       prisma.faceMediaCheck.findMany({ where: { userId }, select: { mediaUrl: true, kind: true, status: true, distance: true } }),
       realPersonRequired(userId),
@@ -627,6 +654,9 @@ export class FaceVerificationService {
       prisma.user.findUnique({ where: { id: userId }, select: { videoPlaybackUrl: true, profileVideoUrl: true } }),
     ]);
     const main = photos[0];
+    // Only what is on the profile now: a removed photo's old result is never marked.
+    const onProfile = new Set([...photos.map((photo) => photo.photoUrl), user?.videoPlaybackUrl, user?.profileVideoUrl].filter((url): url is string => !!url));
+    const checks = stored.filter((check) => onProfile.has(check.mediaUrl));
     // A photo with no face (a view, food, a pet) is fine - unless it's the main photo (3).
     const counted = (check: (typeof checks)[number]) => effectiveStatus({ kind: check.kind, main: check.mediaUrl === main?.photoUrl, status: check.status as MediaStatus, distance: check.distance });
     const flagged = checks.filter((check) => counted(check) !== 'match'

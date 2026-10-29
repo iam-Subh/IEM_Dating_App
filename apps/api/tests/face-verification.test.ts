@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
-import { EXTRA_PHOTO_DISTANCE, MATCH_DISTANCE, SIDE_YAW, TURN_DISTANCE, UNSURE_DISTANCE, distance, effectiveStatus, openDescriptor, sealDescriptor, verdict, type Face } from '../src/services/face-verification.service';
+import { EXTRA_PHOTO_DISTANCE, EXTRA_PHOTO_REVIEW_DISTANCE, MATCH_DISTANCE, SIDE_YAW, TURN_DISTANCE, UNSURE_DISTANCE, distance, effectiveStatus, openDescriptor, sealDescriptor, verdict, type Face } from '../src/services/face-verification.service';
 
 const service = (process.env.FACE_SERVICE_URL ?? 'http://127.0.0.1:8090').replace(/\/$/, '');
 const fixture = (name: string) => fs.readFileSync(path.join(__dirname, 'fixtures', 'faces', name)).toString('base64');
@@ -20,7 +20,13 @@ test('an extra photo just over the strict line counts as them; the main photo an
   assert.equal(effectiveStatus({ kind: 'photo', main: false, status: 'unsure', distance: 0.556 }), 'match');
   assert.equal(effectiveStatus({ kind: 'photo', main: true, status: 'unsure', distance: 0.505 }), 'unsure', 'the main photo keeps the strict line');
   assert.equal(effectiveStatus({ kind: 'video', main: false, status: 'unsure', distance: 0.505 }), 'unsure');
-  assert.equal(effectiveStatus({ kind: 'photo', main: false, status: 'mismatch', distance: 0.7 }), 'mismatch');
+  // Close but not sure, on an extra photo: the team looks, it is not called "not you".
+  assert.ok(UNSURE_DISTANCE < EXTRA_PHOTO_REVIEW_DISTANCE);
+  assert.equal(effectiveStatus({ kind: 'photo', main: false, status: 'mismatch', distance: 0.619 }), 'unsure');
+  assert.equal(effectiveStatus({ kind: 'photo', main: false, status: 'mismatch', distance: 0.7 }), 'unsure');
+  assert.equal(effectiveStatus({ kind: 'photo', main: false, status: 'mismatch', distance: 0.82 }), 'mismatch', 'clearly someone else');
+  assert.equal(effectiveStatus({ kind: 'photo', main: true, status: 'mismatch', distance: 0.619 }), 'mismatch', 'the main photo stays strict');
+  assert.equal(effectiveStatus({ kind: 'video', main: false, status: 'mismatch', distance: 0.619 }), 'mismatch', 'the video stays strict');
 });
 
 /** A face this far (by distance) from a key of zeros, turned by `yaw`. */
@@ -38,6 +44,10 @@ test('a side-view photo is them when it is within the turn line; a front view is
   assert.equal(verdict([faceAt(0.65, 0.02)], zeros).status, 'mismatch', 'facing the camera, 0.65 is someone else');
   assert.equal(verdict([faceAt(0.82, SIDE_YAW + 0.2)], zeros).status, 'mismatch', 'too far even for a side view');
   assert.equal(verdict([faceAt(0.45, SIDE_YAW + 0.2)], zeros).status, 'match');
+  // Only the pose-tolerant detector found it: a side view, even when its yaw reads as front.
+  assert.equal(verdict([{ ...faceAt(0.619, 0.04), frontal: false }], zeros).status, 'side');
+  assert.equal(verdict([{ ...faceAt(0.619, 0.04), frontal: true }], zeros).status, 'mismatch');
+  assert.equal(verdict([{ ...faceAt(0.82, 0.04), frontal: false }], zeros).status, 'mismatch', 'too far even for a side view');
   // As an extra photo a side view counts; as the main photo the team looks.
   assert.equal(effectiveStatus({ kind: 'photo', main: false, status: 'side', distance: 0.65 }), 'match');
   assert.equal(effectiveStatus({ kind: 'photo', main: true, status: 'side', distance: 0.65 }), 'unsure');

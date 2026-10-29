@@ -10,6 +10,7 @@ numbers out, nothing stored.
                                   "descriptor": [128 floats],
                                   "eyeOpen": float,   # eye aspect ratio; low = closed
                                   "yaw": float,       # nose offset / eye distance; sign = direction
+                                  "frontal": bool,    # found by the front-only detector; false = turned away
                                   "smile": float}]    # mouth width / eye distance
                      }, ...]}
     GET  /health    -> {"ok": true, "model": "dlib_face_recognition_resnet_model_v1"}
@@ -191,11 +192,10 @@ def _cnn_boxes(pixels: np.ndarray):
 
 
 def _analyze_one(pixels: np.ndarray) -> dict:
-    boxes = face_recognition.face_locations(pixels, number_of_times_to_upsample=UPSAMPLE, model="hog")
-    if not boxes:
-        # The fast detector only sees faces from the front; a turned head
-        # needs the slower, pose-tolerant CNN detector (the head-turn step).
-        boxes = _cnn_boxes(pixels)
+    frontal = face_recognition.face_locations(pixels, number_of_times_to_upsample=UPSAMPLE, model="hog")
+    # The fast detector only sees faces from the front; a turned head
+    # needs the slower, pose-tolerant CNN detector (the head-turn step).
+    boxes = frontal or _cnn_boxes(pixels)
     descriptors = face_recognition.face_encodings(pixels, known_face_locations=boxes, num_jitters=1)
     landmarks = face_recognition.face_landmarks(pixels, face_locations=boxes)
     faces = []
@@ -204,6 +204,10 @@ def _analyze_one(pixels: np.ndarray) -> dict:
             "box": list(box),
             "descriptor": [round(float(value), 6) for value in descriptor],
             **_metrics(points),
+            # Found only by the CNN: turned too far for the front-only detector.
+            # On such a face the landmarks often snap to a front-facing shape, so
+            # "yaw" can read about 0 for a clear three-quarter view looking down.
+            "frontal": bool(frontal),
         })
     return {"faces": faces, "width": int(pixels.shape[1]), "height": int(pixels.shape[0])}
 

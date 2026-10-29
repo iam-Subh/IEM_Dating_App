@@ -113,13 +113,17 @@ export function useFaceMediaIssues() {
   }, [face]);
 }
 
-/** Edit profile, over the photos: one line saying what is marked, and the video's own problem. */
-export function FaceMediaNote() {
+/**
+ * Edit profile, over the photos: one line saying what is marked, and the video's own problem.
+ * `photoUrls` is the grid as it is now, so a marked photo removed before Save stops counting at once.
+ */
+export function FaceMediaNote({ photoUrls }: { photoUrls?: string[] } = {}) {
   const { face } = useFaceStatus();
-  if (!face?.media.length) return null;
-  const photos = face.media.filter((item) => item.kind === 'photo' && item.status !== 'unsure');
-  const video = face.media.find((item) => item.kind === 'video' && item.status !== 'unsure');
-  const reviewing = face.media.every((item) => item.status === 'unsure');
+  const media = (face?.media ?? []).filter((item) => item.kind !== 'photo' || !photoUrls || photoUrls.includes(item.url));
+  if (!media.length) return null;
+  const photos = media.filter((item) => item.kind === 'photo' && item.status !== 'unsure');
+  const video = media.find((item) => item.kind === 'video' && item.status !== 'unsure');
+  const reviewing = media.every((item) => item.status === 'unsure');
   if (reviewing) {
     return <ReminderBanner flush icon="time-outline" tone="warn" action="" style={[styles.mediaNote, styles.mediaReviewNote]}
       text="Our team is checking a photo. You can keep using the app." />;

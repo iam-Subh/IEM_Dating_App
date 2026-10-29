@@ -830,7 +830,7 @@ export const EditProfileScreen = () => {
         )}
         <Text style={styles.photoInstruction}>Hold and drag to reorder. Your first photo leads your profile.</Text>
         {/* A photo the selfie check could not match is marked on its own tile. */}
-        <FaceMediaNote />
+        <FaceMediaNote photoUrls={currentPhotos.map((photo) => photo.photoUrl || photo.uri)} />
         <PhotoReorderGrid
           embedded
           issues={tileIssues}

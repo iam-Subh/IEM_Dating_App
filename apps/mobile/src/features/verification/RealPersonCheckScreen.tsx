@@ -68,17 +68,32 @@ const mlKit: null | { detect: (uri: string, options: object) => Promise<MlFace[]
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** How open both eyes look, 0 to 1; undefined when ML Kit could not say. */
+const eyesOpen = (face: MlFace) => face.leftEyeOpenProbability === undefined || face.rightEyeOpenProbability === undefined
+  ? undefined : (face.leftEyeOpenProbability + face.rightEyeOpenProbability) / 2;
+/** Closed: under this, or under half of how open their own eyes looked when they looked straight. */
+const EYES_CLOSED = 0.4;
+const CLOSED_SHARE = 0.5;
+
 /** Is this frame doing what the step asks? Undefined: can't tell on this phone. */
-async function looksRight(step: Step, uri: string, straightYaw: number | null): Promise<boolean | undefined> {
+async function looksRight(step: Step, uri: string, straightYaw: number | null, straightEyes: number | null): Promise<boolean | undefined> {
   if (!mlKit) return undefined;
   try {
-    const faces = await mlKit.detect(uri, { classificationMode: 'all', performanceMode: 'fast' });
+    // Closed eyes are harder to read, so that step gets the slower, careful mode.
+    const faces = await mlKit.detect(uri, { classificationMode: 'all', performanceMode: step === 'blink' ? 'accurate' : 'fast' });
+    // With the eyes shut ML Kit often loses the face or can't score the eyes.
+    // That is "can't tell", not "eyes open": the server checks the frame itself.
+    if (step === 'blink') {
+      const eyes = faces.length === 1 ? eyesOpen(faces[0]) : undefined;
+      if (__DEV__) console.log('[FACE] closed eyes', JSON.stringify({ faces: faces.length, eyes, straightEyes }));
+      if (eyes === undefined) return undefined;
+      return eyes < EYES_CLOSED || (straightEyes !== null && eyes < straightEyes * CLOSED_SHARE);
+    }
     if (faces.length !== 1) return false;
     const face = faces[0];
-    const eyes = ((face.leftEyeOpenProbability ?? 1) + (face.rightEyeOpenProbability ?? 1)) / 2;
+    const eyes = eyesOpen(face) ?? 1;
     switch (step) {
       case 'straight': return Math.abs(face.rotationY) < 12 && eyes > 0.5;
-      case 'blink': return eyes < 0.3;
       // Any clear turn, all the way to a full side view.
       case 'left': case 'right':
         return Math.abs(face.rotationY - (straightYaw ?? 0)) > 15;
@@ -227,6 +242,7 @@ export function RealPersonCheckScreen() {
       setStepTotal(steps.length);
       const frames: { step: Step; index: number; uri: string }[] = [];
       let straightYaw: number | null = null;
+      let straightEyes: number | null = null;
       for (const [number, current] of steps.entries()) {
         if (!active()) return;
         setStep(current);
@@ -239,7 +255,8 @@ export function RealPersonCheckScreen() {
           // A turn's first frame comes early, mid-turn, while both eyes still
           // show; the next one once they have turned further.
           const turn = current === 'left' || current === 'right';
-          await wait(current === 'straight' ? 1500 : turn ? 900 : 2200);
+          // Eyes still shut on a retry: no time is needed to read the step again.
+          await wait(current === 'straight' ? 1500 : turn ? 900 : current === 'blink' && attempt ? 400 : 2200);
           if (!active()) return;
           const taken: string[] = [];
           for (let index = 0; index < challenge.framesPerStep; index++) {
@@ -250,7 +267,7 @@ export function RealPersonCheckScreen() {
             if (!active()) return;
             taken.push(uri);
           }
-          const checks = await Promise.all(taken.map((uri) => looksRight(current, uri, straightYaw)));
+          const checks = await Promise.all(taken.map((uri) => looksRight(current, uri, straightYaw, straightEyes)));
           if (!active()) return;
           // Local checks guide retries. The server verifies every frame.
           done = checks.every((value) => value === undefined) || checks.some((value) => value === true);
@@ -258,13 +275,16 @@ export function RealPersonCheckScreen() {
           if (done) {
             taken.forEach((uri, index) => frames.push({step: current, index, uri}));
             if (current === 'straight' && mlKit) {
-              const faces = await mlKit.detect(taken[0], {performanceMode: 'fast'}).catch(() => []);
+              const faces = await mlKit.detect(taken[0], {classificationMode: 'all', performanceMode: 'fast'}).catch(() => [] as MlFace[]);
               if (!active()) return;
               straightYaw = faces[0]?.rotationY ?? null;
+              straightEyes = faces[0] ? eyesOpen(faces[0]) ?? null : null;
             }
           }
-          // End the hold cue even when an action needs another attempt.
-          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+          // The vibration means "done, you can stop". With their eyes shut they
+          // can't read "try again", so a missed closed-eyes frame is simply
+          // taken again while they keep them closed - no buzz until the end.
+          if (done || current !== 'blink' || attempt === 2) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
         }
         if (!done) {
           setResult({status: 'failed', reason: 'liveness', failedStep: current, message: "We couldn't see that step. Find good light, keep your face in the oval, and try again."});
