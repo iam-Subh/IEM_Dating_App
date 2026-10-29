@@ -66,7 +66,7 @@ leave **Allow write access** off.
 
 ```bash
 printf 'Host github.com\n  IdentityFile ~/.ssh/github\n' >> ~/.ssh/config
-git clone git@github.com:Subhankar-Patra1/IEM_Dating_App.git ~/iem
+git clone git@github.com:iam-Subh/IEM_Dating_App.git ~/iem
 cd ~/iem
 ```
 
