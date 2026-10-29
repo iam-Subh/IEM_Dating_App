@@ -1,5 +1,6 @@
 import React, {useRef, useState} from 'react';
-import {View, Text, Pressable, TextInput, TextInputProps, StyleSheet, StatusBar, KeyboardAvoidingView, ScrollView, Platform, ActivityIndicator, StyleProp, TextStyle, ViewStyle} from 'react-native';
+import {View, Text, Pressable, TextInput, TextInputProps, StyleSheet, StatusBar, ActivityIndicator, StyleProp, TextStyle, ViewStyle} from 'react-native';
+import {KeyboardAwareScrollView} from 'react-native-keyboard-controller';
 import {LinearGradient} from 'expo-linear-gradient';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {Ionicons} from '@expo/vector-icons';
@@ -12,14 +13,14 @@ export function AuthEntryFrame({title,subtitle,onBack,children,footer,titleStyle
   return <LinearGradient colors={colors} locations={[0,0.48,1]} style={{flex:1}}>
     <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent/>
     <View style={[auth.nav,{paddingTop:insets.top+8}]}><Pressable onPress={onBack} accessibilityRole="button" accessibilityLabel="Back" style={auth.back}><Ionicons name="arrow-back" size={22} color="#352335"/></Pressable></View>
-    <KeyboardAvoidingView style={{flex:1}} behavior={Platform.OS==='ios'?'padding':undefined}>
-      <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={[auth.content,{paddingBottom:insets.bottom+24}]}>
+      <KeyboardAwareScrollView style={{flex:1}} bottomOffset={24} keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag" showsVerticalScrollIndicator={false}
+        contentContainerStyle={[auth.content,{paddingBottom:insets.bottom+24}]}>
         {headingGraphic}
         <View style={[auth.heading,headingStyle]}><Text accessibilityRole="header" style={[auth.title,titleStyle]}>{title}</Text><Text style={[auth.subtitle,subtitleStyle]}>{subtitle}</Text></View>
         <View style={auth.form}>{children}</View>
         {footer}
-      </ScrollView>
-    </KeyboardAvoidingView>
+      </KeyboardAwareScrollView>
   </LinearGradient>;
 }
 

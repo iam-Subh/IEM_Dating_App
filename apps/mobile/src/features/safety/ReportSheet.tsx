@@ -1,7 +1,9 @@
 import React, { useContext, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Animated, BackHandler, Easing, Linking, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
+  ActivityIndicator, Animated, BackHandler, Easing, Keyboard, Linking, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
 } from 'react-native';
+import {useReanimatedKeyboardAnimation} from 'react-native-keyboard-controller';
+import Reanimated, {useAnimatedStyle} from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { initialWindowMetrics, SafeAreaInsetsContext } from 'react-native-safe-area-context';
 import { api } from '../../services/api';
@@ -23,7 +25,7 @@ import { recordSetback } from '../feedback/engagement';
 export type ReportTarget = {
   userId: string;
   name: string;
-  sourceType: 'profile' | 'message' | 'story' | 'rose';
+  sourceType: 'profile' | 'message' | 'story' | 'rose' | 'comment';
   sourceId?: string;
   matchId?: string;
   /** Offer "Also block". Off where blocking isn't possible (they already blocked you). */
@@ -59,12 +61,28 @@ export function ReportHost() {
   const result = useRef<ReportResult>({ sent: false, blocked: false });
   const resolver = useRef<(value: ReportResult) => void>(() => {});
   const shown = useRef(new Animated.Value(0)).current;
+  const detailsScroll = useRef<ScrollView>(null);
+  const inputY = useRef(0);
+  const inputFocused = useRef(false);
+  const {height: keyboardHeight, progress: keyboardProgress} = useReanimatedKeyboardAnimation();
+  // Bound the sheet to the keyboard inset in the Modal's full-screen window.
+  // Shrinking a flex-end child still anchors it to the bottom of that window;
+  // an explicit bottom inset moves both the form and its action above the IME.
+  const keyboardFrame = useAnimatedStyle(() => ({bottom: Math.max(0, -keyboardHeight.value)}));
+  const sheetInsets = useAnimatedStyle(() => ({
+    paddingBottom: 12 + insets.bottom * (1 - Math.max(0, Math.min(1, keyboardProgress.value))),
+  }));
+  const revealInput = () => {
+    if (inputFocused.current) detailsScroll.current?.scrollTo({y: inputY.current, animated: false});
+  };
 
   useEffect(() => {
     host = (next, done) => {
+      Keyboard.dismiss();
       resolver.current(result.current);
       resolver.current = done;
       result.current = { sent: false, blocked: false };
+      inputFocused.current = false;
       setTarget(next); setStep('reason'); setReason(null); setDetail(null); setText('');
       setAlsoBlock(next.canBlock !== false); setError(''); setBusy(false);
       shown.setValue(0);
@@ -74,6 +92,8 @@ export function ReportHost() {
   }, [shown]);
 
   const close = () => {
+    inputFocused.current = false;
+    Keyboard.dismiss();
     Animated.timing(shown, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => {
       setTarget(null);
       resolver.current(result.current);
@@ -82,7 +102,7 @@ export function ReportHost() {
   };
   const back = () => {
     if (busy) return true;
-    if (step === 'details') { setStep('reason'); return true; }
+    if (step === 'details') { inputFocused.current = false; Keyboard.dismiss(); setStep('reason'); return true; }
     close();
     return true;
   };
@@ -95,6 +115,7 @@ export function ReportHost() {
   const choose = (next: ReportReason) => { setReason(next); setDetail(null); setStep('details'); };
   const submit = async () => {
     if (!target || !reason || busy) return;
+    Keyboard.dismiss();
     setBusy(true); setError('');
     try {
       const description = [detail, text.trim()].filter(Boolean).join(' - ') || undefined;
@@ -122,12 +143,15 @@ export function ReportHost() {
   const name = target.name || 'this person';
   const translateY = shown.interpolate({ inputRange: [0, 1], outputRange: [500, 0] });
 
-  return <Modal visible transparent animationType="none" statusBarTranslucent onRequestClose={back}>
+  return <Modal visible transparent animationType="none" statusBarTranslucent navigationBarTranslucent onRequestClose={back}>
     <View style={styles.root}>
       <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: shown }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={() => { if (!busy) close(); }} accessibilityRole="button" accessibilityLabel="Close" />
       </Animated.View>
-      <Animated.View accessibilityViewIsModal style={[styles.sheet, { paddingBottom: insets.bottom + 12, transform: [{ translateY }] }]}>
+      <Reanimated.View style={[styles.keyboardArea, {top: insets.top + 12}, keyboardFrame]}
+        pointerEvents="box-none" testID="report-keyboard-container">
+      <Animated.View accessibilityViewIsModal style={[styles.sheet, {transform: [{translateY}]}]}>
+      <Reanimated.View style={[styles.sheetContent, sheetInsets]}>
         <View style={styles.handle} />
 
         {step === 'reason' ? <>
@@ -145,12 +169,14 @@ export function ReportHost() {
 
         {step === 'details' && reason ? <>
           <View style={styles.detailsHead}>
-            <Pressable accessibilityRole="button" accessibilityLabel="Back to reasons" onPress={() => setStep('reason')} hitSlop={8} style={styles.backButton}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Back to reasons" onPress={back} hitSlop={8} style={styles.backButton}>
               <Ionicons name="chevron-back" size={22} color={c.text} />
             </Pressable>
             <Text accessibilityRole="header" style={[styles.title, { flex: 1 }]} numberOfLines={2}>{reason.label}</Text>
           </View>
-          <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} style={{ maxHeight: 420 }}>
+          <ScrollView ref={detailsScroll} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
+            showsVerticalScrollIndicator={false} style={styles.detailsScroll} contentContainerStyle={{paddingBottom: 8}}
+            onLayout={revealInput} testID="report-details-scroll">
             {reason.details ? <View style={styles.chips}>
               {reason.details.map((item) => <Pressable key={item} accessibilityRole="radio" accessibilityState={{ checked: detail === item }}
                 onPress={() => setDetail(detail === item ? null : item)} style={[styles.chip, detail === item && styles.chipOn]}>
@@ -158,7 +184,11 @@ export function ReportHost() {
               </Pressable>)}
             </View> : null}
             <TextInput value={text} onChangeText={setText} placeholder="Anything else we should know? (optional)" placeholderTextColor={c.muted}
-              multiline maxLength={1000} style={styles.input} accessibilityLabel="More detail, optional" />
+              multiline scrollEnabled maxLength={1000} style={styles.input} accessibilityLabel="More detail, optional"
+              onLayout={event => {inputY.current = event.nativeEvent.layout.y;}}
+              onFocus={() => {inputFocused.current = true; revealInput();}}
+              onBlur={() => {inputFocused.current = false;}}
+              keyboardAppearance="dark" testID="report-details-input" />
             {target.canBlock !== false ? <View style={styles.blockRow}>
               <View style={{ flex: 1 }}><Text style={styles.blockTitle}>Also block {name}</Text><Text style={styles.blockNote}>You won't see each other anywhere in the app.</Text></View>
               <Switch value={alsoBlock} onValueChange={setAlsoBlock} trackColor={{ true: c.accent, false: '#3A363B' }} thumbColor="#FFFFFF" />
@@ -193,15 +223,20 @@ export function ReportHost() {
             <Text style={styles.primaryText}>Done</Text>
           </Pressable>
         </> : null}
+      </Reanimated.View>
       </Animated.View>
+      </Reanimated.View>
     </View>
   </Modal>;
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, justifyContent: 'flex-end' },
+  keyboardArea: {position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'flex-end'},
   backdrop: { backgroundColor: 'rgba(0,0,0,0.55)' },
-  sheet: { maxHeight: '92%', width: '100%', maxWidth: 560, alignSelf: 'center', backgroundColor: '#1D1B1E', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 8 },
+  sheet: {maxHeight: '100%', flexShrink: 1, width: '100%', maxWidth: 560, alignSelf: 'center', backgroundColor: '#1D1B1E', borderTopLeftRadius: 24, borderTopRightRadius: 24},
+  sheetContent: {flexShrink: 1, paddingHorizontal: 20, paddingTop: 8},
+  detailsScroll: {maxHeight: 420, minHeight: 0, flexShrink: 1},
   handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: '#4A464C', marginBottom: 14 },
   title: { fontFamily: 'DMSans_700Bold', fontSize: 19, lineHeight: 25, color: c.text },
   subtitle: { fontFamily: 'DMSans_400Regular', fontSize: 14, lineHeight: 20, color: c.secondary, marginTop: 4 },
